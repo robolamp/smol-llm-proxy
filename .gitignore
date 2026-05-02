@@ -23,6 +23,9 @@ data/*.db-wal
 *.swp
 *.swo
 
+# Test config (contains server URLs)
+tests/test_servers.yaml
+
 # OS
 .DS_Store
 Thumbs.db

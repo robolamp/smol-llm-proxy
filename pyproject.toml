@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "smol-llm-proxy"
+version = "0.1.0"
+description = "Lightweight API key proxy for llama.cpp server with token usage tracking"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "httpx>=0.27.0",
+    "pydantic>=2.0.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "ruff>=0.6.0"]
+
+[project.scripts]
+smol-llm-proxy = "main:app"
+
+[tool.setuptools.packages.find]
+include = ["smol_llm_proxy*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
