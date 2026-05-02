@@ -263,6 +263,8 @@ async def proxy_models():
 @app.on_event("startup")
 def startup():
     init_db()
+    from smol_llm_proxy.config_loader import sync_config
+    sync_config()
 
 
 if __name__ == "__main__":

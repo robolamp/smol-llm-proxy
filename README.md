@@ -8,7 +8,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 
 - Per-user API keys (create / delete / toggle active)
 - Multi-server routing by model name
-- Model aliases (`qwen-smol` → `Qwen3.5-2B-UD-Q4_K_XL.gguf`)
+- Model aliases (`alias` → `model-name.gguf`)
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
@@ -27,48 +27,28 @@ sqlite3  — stdlib, built-in database
 
 ```bash
 # Install
-pip install fastapi uvicorn httpx pydantic
+pip install fastapi uvicorn httpx pydantic pyyaml
 
-# Run (requires ADMIN_KEY env var)
+# Edit config.yaml with your llama-server URLs, then run
 ADMIN_KEY=secret python -m smol_llm_proxy
 ```
 
 The proxy listens on `0.0.0.0:8000` by default. Override with `PROXY_PORT` and `PROXY_HOST` env vars.
 
-## Setup
+## Configuration
 
-### 1. Register a llama-server
+Edit `config.yaml` to define servers, models, and aliases. These are loaded into SQLite at startup and persist across restarts.
 
-```bash
-curl -X POST http://localhost:8000/admin/servers \
-  -H "Authorization: Bearer secret" \
-  -d '{"name": "local", "url": "http://127.0.0.1:8080"}'
-```
+```yaml
+servers:
+  - name: my-server
+    url: http://host:port
+    api_key: ""       # optional
+    models:
+      - model-name.gguf
 
-### 2. Assign a model to the server
-
-```bash
-curl -X POST http://localhost:8000/admin/servers/1/models \
-  -H "Authorization: Bearer secret" \
-  -d '{"model_name": "Qwen3.5-2B-UD-Q4_K_XL.gguf"}'
-```
-
-### 3. Create a user key
-
-```bash
-curl -X POST http://localhost:8000/admin/keys \
-  -H "Authorization: Bearer secret" \
-  -d '{"name": "alice"}'
-# → {"ok": true, "key": "sk-abc...", "name": "alice"}
-```
-
-### 4. Use it
-
-```bash
-curl http://localhost:8000/v1/chat/completions \
-  -H "Authorization: Bearer sk-abc..." \
-  -H "Content-Type: application/json" \
-  -d '{"model": "Qwen3.5-2B-UD-Q4_K_XL.gguf", "messages": [{"role": "user", "content": "hi"}]}'
+aliases:
+  alias: model-name.gguf
 ```
 
 ## Admin API
@@ -91,13 +71,13 @@ Each request logs: user, server, model name, prompt/completion tokens, timings (
 
 ```bash
 curl "http://localhost:8000/admin/usage?key_id=1" \
-  -H "Authorization: Bearer secret"
+  -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
 ## Architecture
 
 ```
-[users] ──HTTPS──> [proxy :8000] ──HTTP──> [llama-server :8080]
+[users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server :port]
                       │
                       ├── validate API key (SQLite)
                       ├── route by model name → server

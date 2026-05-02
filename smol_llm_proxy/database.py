@@ -59,13 +59,13 @@ def init_db():
 
             CREATE TABLE IF NOT EXISTS api_keys (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key TEXT UNIQUE NOT NULL,
+                key_hash TEXT UNIQUE NOT NULL,
                 name TEXT NOT NULL,
                 active INTEGER NOT NULL DEFAULT 1,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
 
-            CREATE INDEX IF NOT EXISTS idx_api_keys_key ON api_keys(key);
+            CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
 
             CREATE TABLE IF NOT EXISTS usage_logs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

@@ -23,7 +23,8 @@ data/*.db-wal
 *.swp
 *.swo
 
-# Test config (contains server URLs)
+# Sensitive configs (server URLs, API keys)
+config.yaml
 tests/test_servers.yaml
 
 # OS
