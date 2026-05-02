@@ -235,19 +235,25 @@ async def proxy_streaming(request: Request, path: str):
 async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
     """Forward requests that don't need auth (e.g. /v1/models)."""
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT url FROM servers WHERE active = 1 LIMIT 1"
-        ).fetchone()
+        rows = conn.execute(
+            "SELECT url, id FROM servers WHERE active = 1"
+        ).fetchall()
 
-    if not row:
+    if not rows:
         raise HTTPException(status_code=503, detail="No active llama-server configured")
 
-    target_url = _format_server_url(row["url"], path)
+    all_models = []
+    for row in rows:
+        target_url = _format_server_url(row["url"], path)
+        try:
+            status_code, resp_body = await _forward_request(
+                target_url, {}, body, "GET"
+            )
+            data = json.loads(resp_body)
+            if "data" in data:
+                for m in data["data"]:
+                    all_models.append(m)
+        except httpx.ConnectError:
+            continue
 
-    try:
-        status_code, resp_body = await _forward_request(
-            target_url, {}, body, "GET"
-        )
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
-    return JSONResponse(content=json.loads(resp_body), status_code=status_code)
+    return JSONResponse(content={"object": "list", "data": all_models}, status_code=200)
