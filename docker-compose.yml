@@ -1,0 +1,16 @@
+services:
+  proxy:
+    build: .
+    ports:
+      - "${PROXY_PORT:-8000}:8000"
+    environment:
+      - ADMIN_KEY=${ADMIN_KEY}
+      - DB_PATH=/data/proxy.db
+      - CONFIG_PATH=/config/config.yaml
+    volumes:
+      - db-data:/data
+      - ./config.yaml:/config/config.yaml:ro
+    restart: unless-stopped
+
+volumes:
+  db-data:

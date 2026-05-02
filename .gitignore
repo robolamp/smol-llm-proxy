@@ -25,6 +25,7 @@ data/*.db-wal
 
 # Sensitive configs (server URLs, API keys)
 config.yaml
+.env
 tests/test_servers.yaml
 
 # OS

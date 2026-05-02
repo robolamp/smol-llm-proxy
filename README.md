@@ -74,6 +74,33 @@ curl "http://localhost:8000/admin/usage?key_id=1" \
   -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
+## Docker
+
+### docker-compose (recommended)
+
+```bash
+cp .env.example .env          # set ADMIN_KEY
+cp config.example.yaml config.yaml  # fill in your servers
+docker compose up -d --build
+```
+
+Volumes:
+- `db-data` — SQLite DB persists across container restarts (`/data/proxy.db`)
+- `./config.yaml:/config/config.yaml:ro` — config mounted read-only
+
+Env vars: `ADMIN_KEY`, `PROXY_PORT`, `DB_PATH`, `CONFIG_PATH`
+
+### Dockerfile only
+
+```bash
+docker build -t smol-llm-proxy .
+docker run -p 8000:8000 \
+  -e ADMIN_KEY=secret \
+  -v db-data:/data \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  smol-llm-proxy
+```
+
 ## Architecture
 
 ```
