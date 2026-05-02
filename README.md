@@ -104,12 +104,15 @@ docker run -p 8000:8000 \
 ## Architecture
 
 ```
-[users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server :port]
-                      │
-                      ├── validate API key (SQLite)
-                      ├── route by model name → server
-                      ├── forward request (+ replace auth header)
-                      └── log tokens from response
+[users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server 1 :port]
+                       │                   [llama-server 2 :port]
+                       │                   [llama-server N :port]
+                       │
+                       ├── validate API key (SQLite)
+                       ├── resolve alias —> real model name
+                       ├── route by model name —> matching server
+                       ├── forward request (+ replace auth header)
+                       └── log tokens + timings from response
 ```
 
 
