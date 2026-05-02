@@ -1,16 +1,14 @@
 services:
-  proxy:
+  app:
     build: .
     ports:
       - "${PROXY_PORT:-8000}:8000"
+    env_file:
+      - .env
     environment:
-      - ADMIN_KEY=${ADMIN_KEY}
-      - DB_PATH=/data/proxy.db
-      - CONFIG_PATH=/config/config.yaml
+      - DB_PATH=${DB_CONTAINER_PATH:-/app/data/proxy.db}
+      - CONFIG_PATH=${CONFIG_PATH:-/config/config.yaml}
     volumes:
-      - db-data:/data
+      - ${DATA_DIR:-./data}:/app/data
       - ./config.yaml:/config/config.yaml:ro
     restart: unless-stopped
-
-volumes:
-  db-data:

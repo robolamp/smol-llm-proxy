@@ -232,7 +232,7 @@ async def proxy_streaming(request: Request, path: str):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-async def proxy_public(request: Request, path: str):
+async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
     """Forward requests that don't need auth (e.g. /v1/models)."""
     with get_db() as conn:
         row = conn.execute(
@@ -244,12 +244,9 @@ async def proxy_public(request: Request, path: str):
 
     target_url = _format_server_url(row["url"], path)
 
-    upstream_headers = dict(request.headers)
-    upstream_headers.pop("host", None)
-
     try:
         status_code, resp_body = await _forward_request(
-            target_url, upstream_headers, await request.body(), request.method
+            target_url, {}, body, "GET"
         )
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")

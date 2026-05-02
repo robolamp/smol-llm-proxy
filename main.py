@@ -255,7 +255,7 @@ async def proxy_embeddings(request: Request):
 
 @app.get("/v1/models")
 async def proxy_models():
-    return await proxy_public(Request({"type": "http", "method": "GET", "path": "/v1/models"}), "v1/models")
+    return await proxy_public(b"")
 
 
 # ── Startup ──────────────────────────────────────────────────────────────
