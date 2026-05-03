@@ -102,6 +102,30 @@ docker run -p 8000:8000 \
   smol-llm-proxy
 ```
 
+## Benchmarking
+
+Proxy overhead measured with Locust against real llama-server backends.
+
+### Low load (5 concurrent users)
+
+| Metric | Direct | Through proxy | Overhead |
+|--------|--------|---------------|----------|
+| P50 latency | 270ms | 290ms | +20ms |
+| P95 latency | 650ms | 670ms | +20ms |
+| RPS | 15.8 | 15.2 | -0.6 |
+
+### Medium load (20 concurrent users)
+
+| Metric | Direct | Through proxy | Overhead |
+|--------|--------|---------------|----------|
+| P50 latency | 1200ms | 1300ms | +100ms |
+| P95 latency | 1600ms | 1600ms | ~0 |
+| RPS | 16.0 | 15.3 | -0.7 |
+
+At low load proxy adds **~20ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay.
+
+Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
+
 ## Architecture
 
 ```
