@@ -26,8 +26,9 @@ sqlite3  — stdlib, built-in database
 ## Quick Start
 
 ```bash
-# Install
+# Install dependencies and the package itself
 pip install fastapi uvicorn httpx pydantic pyyaml
+pip install .
 
 # Edit config.yaml with your llama-server URLs, then run
 ADMIN_KEY=secret python -m smol_llm_proxy
