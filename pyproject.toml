@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0", "ruff>=0.6.0"]
+bench = ["locust>=2.31.0"]
 
 [project.scripts]
 smol-llm-proxy = "__main__:main"

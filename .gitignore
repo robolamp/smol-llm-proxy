@@ -27,6 +27,7 @@ data/*.db-wal
 config.yaml
 .env
 tests/test_servers.yaml
+tests/benchmark/.env.benchmark
 
 # OS
 .DS_Store
