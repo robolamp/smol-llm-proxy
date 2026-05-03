@@ -1,12 +1,11 @@
-"""Entry point: python -m smol_llm_proxy or pip install + smol-llm-proxy."""
+"""Entry point: python -m smol_llm_proxy."""
 
 import uvicorn
-from config import PROXY_HOST, PROXY_PORT
-from main import app
+from smol_llm_proxy.config import PROXY_HOST, PROXY_PORT
 
 
 def main():
-    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT)
+    uvicorn.run("smol_llm_proxy.main:app", host=PROXY_HOST, port=PROXY_PORT)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,16 @@ from smol_llm_proxy.auth import (
 )
 from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_public
 
-app = FastAPI(title="smol-llm-proxy")
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    from smol_llm_proxy.config_loader import sync_config
+    sync_config()
+    yield
+
+app = FastAPI(title="smol-llm-proxy", lifespan=lifespan)
 
 
 # ── Admin helpers ────────────────────────────────────────────────────────
@@ -156,21 +165,21 @@ async def admin_create_key(request: Request, authorization: str | None = Header(
     return JSONResponse({"ok": True, "key": key, "name": name})
 
 
-@app.delete("/admin/keys/{key}")
-async def admin_delete_key(key: str, authorization: str | None = Header(None)):
+@app.delete("/admin/keys/{key_id}")
+async def admin_delete_key(key_id: int, authorization: str | None = Header(None)):
     _check_admin(authorization)
-    deleted = delete_api_key(key)
+    deleted = delete_api_key(key_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"ok": True}
 
 
-@app.patch("/admin/keys/{key}/toggle")
-async def admin_toggle_key(key: str, request: Request, authorization: str | None = Header(None)):
+@app.patch("/admin/keys/{key_id}/toggle")
+async def admin_toggle_key(key_id: int, request: Request, authorization: str | None = Header(None)):
     _check_admin(authorization)
     data = await request.json()
     active = data.get("active", True)
-    result = toggle_api_key(key, active)
+    result = toggle_api_key(key_id, active)
     if not result:
         raise HTTPException(status_code=404, detail="Key not found")
     return result
@@ -258,13 +267,17 @@ async def proxy_models():
     return await proxy_public(b"")
 
 
-# ── Startup ──────────────────────────────────────────────────────────────
+# ── Health ───────────────────────────────────────────────────────────────
 
-@app.on_event("startup")
-def startup():
-    init_db()
-    from smol_llm_proxy.config_loader import sync_config
-    sync_config()
+@app.get("/health")
+async def health():
+    from smol_llm_proxy.database import get_db
+    try:
+        with get_db() as conn:
+            servers = conn.execute("SELECT COUNT(*) as cnt FROM servers WHERE active = 1").fetchone()["cnt"]
+        return {"status": "ok", "active_servers": servers}
+    except Exception:
+        return JSONResponse({"status": "error"}, status_code=503)
 
 
 if __name__ == "__main__":
