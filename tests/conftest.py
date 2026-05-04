@@ -54,6 +54,8 @@ def admin_key(client):
     from smol_llm_proxy.auth import create_api_key
     key = create_api_key("test-user")
     yield key
+    from smol_llm_proxy.metrics import flush_usage_logs
+    flush_usage_logs()
     from smol_llm_proxy.database import get_db
     with get_db() as conn:
         key_id = conn.execute(
@@ -90,3 +92,5 @@ def server_with_model(server_setup, client):
     assert resp.status_code == 200 or resp.status_code == 409
     server_setup["model_name"] = model_name
     return server_setup
+
+

@@ -1,7 +1,6 @@
 """Token counting and usage logging."""
 
 import asyncio
-from datetime import datetime
 
 
 _usage_queue: asyncio.Queue = None
@@ -22,13 +21,15 @@ async def _log_worker():
 
     batch = []
     while True:
+        got_timeout = False
         try:
             item = await asyncio.wait_for(_usage_queue.get(), timeout=1.0)
             batch.append(item)
         except asyncio.TimeoutError:
-            pass
+            got_timeout = True
 
-        if len(batch) >= 50 or (batch and len(batch) >= 10):
+        should_flush = len(batch) >= 50 or (batch and got_timeout)
+        if should_flush:
             _flush_batch(batch)
             batch.clear()
 
@@ -71,12 +72,12 @@ def flush_usage_logs():
     if _usage_queue is None:
         return
     batch = []
-    while True:
-        try:
+    try:
+        while True:
             item = _usage_queue.get_nowait()
             batch.append(item)
-        except asyncio.QueueEmpty:
-            break
+    except asyncio.QueueEmpty:
+        pass
     if batch:
         _flush_batch(batch)
 

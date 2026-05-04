@@ -12,7 +12,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing (~5ms overhead)
+- In-memory cache for keys, aliases, and routing (~10ms overhead)
 
 ## Dependencies
 
@@ -111,10 +111,10 @@ Proxy overhead measured with Locust against real llama-server backends.
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 280ms | 290ms | +10ms |
-| P95 latency | 680ms | 700ms | +20ms |
-| Mean latency | 326ms | 333ms | +7ms |
-| RPS | 15.3 | 14.9 | -0.3 |
+| P50 latency | 270ms | 280ms | +10ms |
+| P95 latency | 640ms | 670ms | +30ms |
+| Mean latency | 311ms | 323ms | +12ms |
+| RPS | 16.0 | 15.4 | -0.6 |
 
 ### Medium load (20 concurrent users)
 
@@ -122,10 +122,10 @@ Proxy overhead measured with Locust against real llama-server backends.
 |--------|--------|---------------|----------|
 | P50 latency | 1200ms | 1200ms | ~0 |
 | P95 latency | 1600ms | 1600ms | ~0 |
-| Mean latency | 1234ms | 1277ms | +44ms |
-| RPS | 15.9 | 15.4 | -0.5 |
+| Mean latency | 1235ms | 1269ms | +34ms |
+| RPS | 15.9 | 15.5 | -0.4 |
 
-At low load proxy adds **~10ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay.
+At low load proxy adds **~10ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay. The proxy uses in-memory caching for keys, aliases, and routing — hot path touches SQLite only once for async logging.
 
 Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
 
@@ -137,10 +137,7 @@ Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
                        │                   [llama-server N :port]
                        │
                        ├── in-memory cache (keys, aliases, routes)
-                       ├── validate API key (SQLite)
-                       ├── resolve alias —> real model name
-                       ├── route by model name —> matching server
+                       ├── validate API key + resolve routing (1 SQLite connection)
                        ├── forward request (+ replace auth header)
-                       └── async log tokens + timings from response
+                       └── async log tokens + timings (background worker)
 ```
-

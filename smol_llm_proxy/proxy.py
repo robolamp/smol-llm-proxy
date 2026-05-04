@@ -11,9 +11,12 @@ from .database import get_db, validate_key, resolve_routing
 from .auth import _hash_key
 from .cache import (
     get_cached_alias, set_cached_alias,
-    get_cached_route, set_cached_route,
 )
 from .metrics import enqueue_usage, flush_usage_logs
+from .database import get_db
+
+
+
 
 
 def _extract_user_key(authorization: str | None) -> str | None:
@@ -49,7 +52,7 @@ def _format_server_url(server_url: str, path: str) -> str:
 
 
 async def _forward_request(target_url: str, headers: dict, body: bytes, method: str):
-    """Forward a request to llama-server and return (status, body_bytes)."""
+    """Forward a request to llama-server."""
     async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         resp = await client.request(
             method=method,
@@ -100,14 +103,14 @@ async def proxy_non_streaming(request: Request, path: str):
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
 
     routing = resolve_routing(key_info["id"], model_name)
+
+    display_name, real_model_name = await _resolve_model(model_name)
+
     if not routing:
-        display_name, _ = await _resolve_model(model_name)
         raise HTTPException(
             status_code=404,
             detail=f"No server configured for model '{display_name}'",
         )
-
-    display_name, real_model_name = await _resolve_model(model_name)
 
     server = {
         "id": routing["server_id"],
@@ -197,14 +200,14 @@ async def proxy_streaming(request: Request, path: str):
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
 
     routing = resolve_routing(key_info["id"], model_name)
+
+    display_name, real_model_name = await _resolve_model(model_name)
+
     if not routing:
-        display_name, _ = await _resolve_model(model_name)
         raise HTTPException(
             status_code=404,
             detail=f"No server configured for model '{display_name}'",
         )
-
-    display_name, real_model_name = await _resolve_model(model_name)
 
     server = {
         "id": routing["server_id"],
@@ -239,9 +242,9 @@ async def proxy_streaming(request: Request, path: str):
         finally:
             enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                           total_prompt, total_completion, last_prompt_ms, last_predicted_ms)
-            flush_usage_logs()
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    resp = StreamingResponse(generate(), media_type="text/event-stream")
+    return resp
 
 
 async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
