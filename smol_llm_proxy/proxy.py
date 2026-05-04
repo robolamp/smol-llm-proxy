@@ -7,9 +7,13 @@ from fastapi import Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
 
 from .config import HTTPX_TIMEOUT
-from .database import get_db
-from .auth import validate_api_key
-from .metrics import log_usage
+from .database import get_db, validate_key, resolve_routing
+from .auth import _hash_key
+from .cache import (
+    get_cached_alias, set_cached_alias,
+    get_cached_route, set_cached_route,
+)
+from .metrics import enqueue_usage, flush_usage_logs
 
 
 def _extract_user_key(authorization: str | None) -> str | None:
@@ -21,33 +25,21 @@ def _extract_user_key(authorization: str | None) -> str | None:
     return None
 
 
-def _resolve_model(model_name: str) -> tuple[str, str]:
+async def _resolve_model(model_name: str) -> tuple[str, str]:
     """Resolve alias to real model name. Returns (display_name, real_name)."""
+    cached = get_cached_alias(model_name)
+    if cached:
+        return model_name, cached
+
     with get_db() as conn:
         row = conn.execute(
             "SELECT real_model_name FROM model_aliases WHERE alias_name = ?",
             (model_name,),
         ).fetchone()
     if row:
+        set_cached_alias(model_name, row["real_model_name"])
         return model_name, row["real_model_name"]
     return model_name, model_name
-
-
-async def _get_server_for_model(model_name: str):
-    """Look up the server that handles a given model name."""
-    _, real_name = _resolve_model(model_name)
-    with get_db() as conn:
-        row = conn.execute(
-            """SELECT s.id, s.name, s.url, s.api_key, s.active
-               FROM servers s
-               JOIN server_models sm ON sm.server_id = s.id
-               WHERE sm.model_name = ? AND s.active = 1
-               ORDER BY s.id LIMIT 1""",
-            (real_name,),
-        ).fetchone()
-    if not row:
-        return None
-    return {"id": row["id"], "name": row["name"], "url": row["url"], "api_key": row["api_key"]}
 
 
 def _format_server_url(server_url: str, path: str) -> str:
@@ -95,10 +87,6 @@ async def proxy_non_streaming(request: Request, path: str):
     if not user_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    key_info = validate_api_key(user_key)
-    if not key_info:
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-
     body_bytes = await request.body()
     try:
         body_json = json.loads(body_bytes)
@@ -106,13 +94,27 @@ async def proxy_non_streaming(request: Request, path: str):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     model_name = body_json.get("model", "")
-    display_name, real_model_name = _resolve_model(model_name)
-    server = await _get_server_for_model(model_name)
-    if not server:
+    key_hash = _hash_key(user_key)
+    key_info = validate_key(key_hash)
+    if not key_info:
+        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+
+    routing = resolve_routing(key_info["id"], model_name)
+    if not routing:
+        display_name, _ = await _resolve_model(model_name)
         raise HTTPException(
             status_code=404,
             detail=f"No server configured for model '{display_name}'",
         )
+
+    display_name, real_model_name = await _resolve_model(model_name)
+
+    server = {
+        "id": routing["server_id"],
+        "name": "",
+        "url": routing["url"],
+        "api_key": routing["api_key"],
+    }
 
     target_url = _format_server_url(server["url"], path)
 
@@ -126,15 +128,15 @@ async def proxy_non_streaming(request: Request, path: str):
             target_url, upstream_headers, body_bytes, request.method
         )
     except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to server '{server['name']}' at {target_url}")
+        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail=f"Server '{server['name']}' request timed out")
+        raise HTTPException(status_code=504, detail="Server request timed out")
 
     prompt_tokens, completion_tokens, prompt_ms, predicted_ms = _parse_usage_from_body(resp_body)
 
-    with get_db() as conn:
-        log_usage(conn, key_info["id"], server["id"], display_name, real_model_name,
+    enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                   prompt_tokens, completion_tokens, prompt_ms, predicted_ms)
+    flush_usage_logs()
 
     return JSONResponse(content=json.loads(resp_body), status_code=status_code)
 
@@ -182,10 +184,6 @@ async def proxy_streaming(request: Request, path: str):
     if not user_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    key_info = validate_api_key(user_key)
-    if not key_info:
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-
     body_bytes = await request.body()
     try:
         body_json = json.loads(body_bytes)
@@ -193,13 +191,27 @@ async def proxy_streaming(request: Request, path: str):
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     model_name = body_json.get("model", "")
-    display_name, real_model_name = _resolve_model(model_name)
-    server = await _get_server_for_model(model_name)
-    if not server:
+    key_hash = _hash_key(user_key)
+    key_info = validate_key(key_hash)
+    if not key_info:
+        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+
+    routing = resolve_routing(key_info["id"], model_name)
+    if not routing:
+        display_name, _ = await _resolve_model(model_name)
         raise HTTPException(
             status_code=404,
             detail=f"No server configured for model '{display_name}'",
         )
+
+    display_name, real_model_name = await _resolve_model(model_name)
+
+    server = {
+        "id": routing["server_id"],
+        "name": "",
+        "url": routing["url"],
+        "api_key": routing["api_key"],
+    }
 
     target_url = _format_server_url(server["url"], path)
 
@@ -225,9 +237,9 @@ async def proxy_streaming(request: Request, path: str):
                     last_predicted_ms = pr
                 yield chunk
         finally:
-            with get_db() as conn:
-                log_usage(conn, key_info["id"], server["id"], display_name, real_model_name,
+            enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                           total_prompt, total_completion, last_prompt_ms, last_predicted_ms)
+            flush_usage_logs()
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

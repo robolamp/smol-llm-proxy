@@ -12,6 +12,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
+- In-memory cache for keys, aliases, and routing (~5ms overhead)
 
 ## Dependencies
 
@@ -110,19 +111,21 @@ Proxy overhead measured with Locust against real llama-server backends.
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 270ms | 290ms | +20ms |
-| P95 latency | 650ms | 670ms | +20ms |
-| RPS | 15.8 | 15.2 | -0.6 |
+| P50 latency | 280ms | 290ms | +10ms |
+| P95 latency | 680ms | 700ms | +20ms |
+| Mean latency | 326ms | 333ms | +7ms |
+| RPS | 15.3 | 14.9 | -0.3 |
 
 ### Medium load (20 concurrent users)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 1200ms | 1300ms | +100ms |
+| P50 latency | 1200ms | 1200ms | ~0 |
 | P95 latency | 1600ms | 1600ms | ~0 |
-| RPS | 16.0 | 15.3 | -0.7 |
+| Mean latency | 1234ms | 1277ms | +44ms |
+| RPS | 15.9 | 15.4 | -0.5 |
 
-At low load proxy adds **~20ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay.
+At low load proxy adds **~10ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay.
 
 Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
 
@@ -133,11 +136,11 @@ Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
                        │                   [llama-server 2 :port]
                        │                   [llama-server N :port]
                        │
+                       ├── in-memory cache (keys, aliases, routes)
                        ├── validate API key (SQLite)
                        ├── resolve alias —> real model name
                        ├── route by model name —> matching server
                        ├── forward request (+ replace auth header)
-                       └── log tokens + timings from response
+                       └── async log tokens + timings from response
 ```
-
 

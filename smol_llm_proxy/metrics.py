@@ -1,6 +1,84 @@
 """Token counting and usage logging."""
 
+import asyncio
 from datetime import datetime
+
+
+_usage_queue: asyncio.Queue = None
+_logger_task: asyncio.Task = None
+
+
+def _init_async_logger():
+    global _usage_queue, _logger_task
+    if _usage_queue is not None:
+        return
+    _usage_queue = asyncio.Queue(maxsize=1000)
+    _logger_task = asyncio.create_task(_log_worker())
+
+
+async def _log_worker():
+    """Background worker that flushes usage logs to SQLite in batches."""
+    from .database import get_db
+
+    batch = []
+    while True:
+        try:
+            item = await asyncio.wait_for(_usage_queue.get(), timeout=1.0)
+            batch.append(item)
+        except asyncio.TimeoutError:
+            pass
+
+        if len(batch) >= 50 or (batch and len(batch) >= 10):
+            _flush_batch(batch)
+            batch.clear()
+
+
+def _flush_batch(batch):
+    from .database import get_db
+    with get_db() as conn:
+        for item in batch:
+            total = item["prompt_tokens"] + item["completion_tokens"]
+            conn.execute(
+                """INSERT INTO usage_logs
+                   (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens,
+                    prompt_ms, predicted_ms)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (item["key_id"], item["server_id"], item["model_name"], item["real_model_name"],
+                 item["prompt_tokens"], item["completion_tokens"], total,
+                 item["prompt_ms"], item["predicted_ms"]),
+            )
+
+
+def enqueue_usage(key_id: int, server_id: int, model_name: str, real_model_name: str,
+                  prompt_tokens: int, completion_tokens: int, prompt_ms: float = 0.0, predicted_ms: float = 0.0):
+    """Non-blocking usage logging via async queue."""
+    if _usage_queue is None:
+        _init_async_logger()
+    _usage_queue.put_nowait({
+        "key_id": key_id,
+        "server_id": server_id,
+        "model_name": model_name,
+        "real_model_name": real_model_name,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "prompt_ms": prompt_ms,
+        "predicted_ms": predicted_ms,
+    })
+
+
+def flush_usage_logs():
+    """Synchronously flush any pending usage logs to the database."""
+    if _usage_queue is None:
+        return
+    batch = []
+    while True:
+        try:
+            item = _usage_queue.get_nowait()
+            batch.append(item)
+        except asyncio.QueueEmpty:
+            break
+    if batch:
+        _flush_batch(batch)
 
 
 def log_usage(conn, key_id: int, server_id: int, model_name: str, real_model_name: str,

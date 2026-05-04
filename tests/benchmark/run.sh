@@ -99,7 +99,10 @@ echo "=============================================="
 echo " Results comparison"
 echo "=============================================="
 
-# Parse CSV for latency percentiles and RPS
+# Parse CSV values using process substitution (avoids subshell)
+direct_p50=""; direct_p95=""; direct_mean=""; direct_rps=""
+proxy_p50=""; proxy_p95=""; proxy_mean=""; proxy_rps=""
+
 for target in direct proxy; do
     csv="/tmp/bench_${target}_stats.csv"
     if [ ! -f "$csv" ]; then
@@ -107,14 +110,26 @@ for target in direct proxy; do
         continue
     fi
     
-    echo ""
-    echo "--- $target percentiles ---"
-    grep "v1/chat/completions" "$csv" | tail -1 | while IFS=',' read -r type name req_count fail_count median avg min max content_size rps fps t50 t67 t75 t80 t90 t95 t98 t99 t999 t9999 t100; do
-        echo "  P50: ${t50}ms, P95: ${t95}ms, P99: ${t99}ms, mean: ${avg}ms"
-    done
-    
-    # Requests count and RPS from stats CSV
-    grep "v1/chat/completions" "$csv" | tail -1 | while IFS=',' read -r type name req_count fail_count median avg min max content_size rps fps t50 t67 t75 t80 t90 t95 t98 t99 t999 t9999 t100; do
-        echo "  Requests: $req_count, Avg: ${avg}ms, RPS: $(printf '%.1f' "$rps")"
-    done
+    while IFS=',' read -r type name req_count fail_count median avg min max content_size rps fps t50 t67 t75 t80 t90 t95 t98 t99 t999 t9999 t100; do
+        if [ "$target" = "direct" ]; then
+            direct_p50=$t50; direct_p95=$t95; direct_mean=$avg; direct_rps=$rps
+        else
+            proxy_p50=$t50; proxy_p95=$t95; proxy_mean=$avg; proxy_rps=$rps
+        fi
+    done < <(grep "v1/chat/completions" "$csv" | tail -1)
 done
+
+echo ""
+printf "%-15s %-12s %-14s %s\n" "Metric" "Direct" "Through proxy" "Overhead"
+printf "%-15s %-12s %-14s %s\n" "------" "------" "-------------" "--------"
+
+fmt_ms() { printf '%.0fms' "$1"; }
+fmt_rps() { printf '%.1f' "$1"; }
+
+d_p50=${direct_p50:-0}; d_p95=${direct_p95:-0}; d_mean=${direct_mean:-0}; d_rps=${direct_rps:-0}
+p_p50=${proxy_p50:-0}; p_p95=${proxy_p95:-0}; p_mean=${proxy_mean:-0}; p_rps=${proxy_rps:-0}
+
+echo "P50 latency    $(fmt_ms $d_p50)  $(fmt_ms $p_p50)      +$(( ${p_p50%.*} - ${d_p50%.*} ))ms"
+echo "P95 latency    $(fmt_ms $d_p95)  $(fmt_ms $p_p95)      +$(( ${p_p95%.*} - ${d_p95%.*} ))ms"
+echo "Mean latency   $(fmt_ms $d_mean)  $(fmt_ms $p_mean)      $($VENV_PYTHON -c "print(f'{float(${p_mean}) - float(${d_mean}):+4.0f}')")ms"
+echo "RPS            $(fmt_rps $d_rps)  $(fmt_rps $p_rps)      $($VENV_PYTHON -c "print(f'{($p_rps - $d_rps):+.1f}')")"

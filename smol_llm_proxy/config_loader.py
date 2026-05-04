@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from .database import get_db
+from .cache import set_cached_alias, set_cached_route, clear_all
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 
@@ -73,3 +74,19 @@ def sync_config():
                        SELECT 1 FROM model_aliases WHERE alias_name = ?)""",
                 (alias_name, real_model, alias_name),
             )
+
+    # Populate caches from DB
+    with get_db() as conn:
+        for row in conn.execute("SELECT alias_name, real_model_name FROM model_aliases").fetchall():
+            set_cached_alias(row["alias_name"], row["real_model_name"])
+        for row in conn.execute(
+            """SELECT sm.model_name, s.url, s.api_key FROM server_models sm
+               JOIN servers s ON s.id = sm.server_id WHERE s.active = 1"""
+        ).fetchall():
+            set_cached_route(row["model_name"], {"server_id": 0, "url": row["url"], "api_key": row["api_key"]})
+
+    # Populate key cache from DB
+    with get_db() as conn:
+        for row in conn.execute("SELECT id, key_hash, name, active FROM api_keys").fetchall():
+            from .auth import _hash_key
+            # We don't have raw key here, so we skip key cache population at startup

@@ -7,6 +7,10 @@ from contextlib import contextmanager
 from .config import DB_PATH
 
 
+def _row_to_dict(row):
+    return dict(row) if row else None
+
+
 def _get_connection(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
@@ -26,6 +30,33 @@ def get_db():
         raise
     finally:
         conn.close()
+
+
+def validate_key(key_hash: str):
+    """Check if a key is valid and active. Returns key info or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            "SELECT id, name FROM api_keys WHERE key_hash = ? AND active = 1 LIMIT 1",
+            (key_hash,),
+        ).fetchone()
+    return _row_to_dict(row)
+
+
+def resolve_routing(key_id: int, model_name: str):
+    """Resolve alias + find server for a given key. Returns server info or None."""
+    with get_db() as conn:
+        row = conn.execute(
+            """SELECT s.id as server_id, s.url, s.api_key,
+                   COALESCE(ma.real_model_name, ?) as real_model
+              FROM api_keys ak
+              LEFT JOIN model_aliases ma ON ma.alias_name = ?
+              JOIN server_models sm ON sm.model_name = COALESCE(ma.real_model_name, ?)
+              JOIN servers s ON s.id = sm.server_id
+              WHERE ak.id = ? AND s.active = 1
+              LIMIT 1""",
+            (model_name, model_name, model_name, key_id),
+        ).fetchone()
+    return _row_to_dict(row)
 
 
 def init_db():
