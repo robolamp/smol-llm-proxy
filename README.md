@@ -1,28 +1,16 @@
 # smol-llm-proxy
 
-Lightweight API key proxy for llama.cpp servers with per-user token usage tracking.
-
-Routes requests to multiple llama-servers based on model name, tracks token consumption per user, and manages access keys without restarting the backend.
+An API proxy for llama.cpp. Multi-server routing, per-user keys, token accounting. Minimal dependencies, ~5ms overhead.
 
 ## Features
 
 - Per-user API keys (create / delete / toggle active)
-- Multi-server routing by model name
+- Multi-server routing by model name with in-memory cache (~5ms overhead)
 - Model aliases (`alias` -> `model-name.gguf`)
-- Token usage logging: prompt/completion tokens, timings, TPS
+- Token usage logging: prompt/completion tokens, timings
 - Streaming and non-streaming proxy support
+- Connection-pooled httpx client (keepalive connections to backends)
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing (~5ms mean overhead)
-
-## Dependencies
-
-```
-fastapi  — ASGI web framework
-uvicorn  — ASGI server
-httpx    — HTTP client for forwarding
-pydantic — request/response validation
-sqlite3  — stdlib, built-in database
-```
 
 ## Quick Start
 
@@ -34,11 +22,11 @@ cp config.example.yaml config.yaml  # fill in your servers
 docker compose up -d --build
 ```
 
-### Pip install
+### Pip install (alternative)
 
 ```bash
 pip install .
-cp config.example.yaml config.yaml  # отредактируй под свои серверы
+cp config.example.yaml config.yaml   # fill in your servers
 ADMIN_KEY=secret python -m smol_llm_proxy
 ```
 
@@ -52,12 +40,40 @@ Edit `config.yaml` to define servers, models, and aliases. These are loaded into
 servers:
   - name: my-server
     url: http://host:port
-    api_key: ""       # optional
+    api_key: ""
     models:
       - model-name.gguf
 
 aliases:
   alias: model-name.gguf
+```
+
+You can also use `.env` to define database path, admin key and config path:
+
+```bash
+ADMIN_KEY=secret
+PROXY_PORT=8000
+DB_PATH=./data/proxy.db
+CONFIG_PATH=./config.yaml
+```
+
+## Docker
+
+Volumes:
+- `db-data` — SQLite DB persists across container restarts (`/data/proxy.db`)
+- `./config.yaml:/config/config.yaml:ro` — config mounted read-only
+
+Env vars: `ADMIN_KEY`, `PROXY_PORT`, `DB_PATH`, `CONFIG_PATH`
+
+### Dockerfile only
+
+```bash
+docker build -t smol-llm-proxy .
+docker run -p 8000:8000 \
+  -e ADMIN_KEY=secret \
+  -v db-data:/data \
+  -v $(pwd)/config.yaml:/app/config.yaml:ro \
+  smol-llm-proxy
 ```
 
 ## Admin API
@@ -77,9 +93,20 @@ All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
 | `/admin/aliases` | `GET` / `POST` | List or create model aliases |
 | `/admin/aliases/{alias_name}` | `DELETE` | Delete alias |
 | `/admin/usage` | `GET` | View token usage logs |
-| `/health` | `GET` | Health check (no auth required) |
 
 **Note:** Key operations (`DELETE`, `PATCH /toggle`) use integer `key_id` from the database, not the API key string itself.
+
+## Proxy Endpoints
+
+These forward to llama-server backends based on model name routing.
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | `POST` | Chat completions (streaming + non-streaming) |
+| `/v1/completions` | `POST` | Legacy completions |
+| `/v1/embeddings` | `POST` | Embeddings |
+| `/v1/models` | `GET` | List available models (no auth required) |
+| `/health` | `GET` | Health check (no auth required) |
 
 ## Usage Logs
 
@@ -88,33 +115,6 @@ Each request logs: user, server, model name, prompt/completion tokens, timings (
 ```bash
 curl "http://localhost:8000/admin/usage?key_id=1" \
   -H "Authorization: Bearer $ADMIN_KEY"
-```
-
-## Docker
-
-### docker-compose (recommended)
-
-```bash
-cp .env.example .env          # set ADMIN_KEY
-cp config.example.yaml config.yaml  # fill in your servers
-docker compose up -d --build
-```
-
-Volumes:
-- `db-data` — SQLite DB persists across container restarts (`/data/proxy.db`)
-- `./config.yaml:/config/config.yaml:ro` — config mounted read-only
-
-Env vars: `ADMIN_KEY`, `PROXY_PORT`, `DB_PATH`, `CONFIG_PATH`
-
-### Dockerfile only
-
-```bash
-docker build -t smol-llm-proxy .
-docker run -p 8000:8000 \
-  -e ADMIN_KEY=secret \
-  -v db-data:/data \
-  -v $(pwd)/config.yaml:/app/config.yaml:ro \
-  smol-llm-proxy
 ```
 
 ## Benchmarking
@@ -153,11 +153,11 @@ Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
 ```
 [users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server 1 :port]
-                        │                   [llama-server 2 :port]
-                        │                   [llama-server N :port]
+                        │                  [llama-server 2 :port]
+                        │                  [llama-server N :port]
                         │
                         ├── in-memory cache (keys, aliases, routes)
-                         ├── validate API key + resolve routing (SQLite on first call, then cache)
-                         ├── forward request via connection-pooled httpx client
-                         └── async log tokens + timings (background worker, no blocking)
+                        ├── validate API key + resolve routing (SQLite on first call, then cache)
+                        ├── forward request via connection-pooled httpx client
+                        └── async log tokens + timings (background worker, no blocking)
 ```

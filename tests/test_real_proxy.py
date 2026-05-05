@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 import uuid
@@ -40,7 +41,7 @@ def _start_proxy(port, db_path, config_path):
     project_dir = Path(__file__).resolve().parent.parent
 
     proc = subprocess.Popen(
-        [str(project_dir / ".venv" / "bin" / "python"), "-m", "uvicorn", "main:app",
+        [sys.executable, "-m", "uvicorn", "main:app",
          "--host", "127.0.0.1", "--port", str(port)],
         env=env,
         cwd=str(project_dir),
