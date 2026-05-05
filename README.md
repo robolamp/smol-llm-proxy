@@ -12,7 +12,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing
+- In-memory cache for keys, aliases, and routing (~20ms mean overhead)
 
 ## Dependencies
 
@@ -105,25 +105,25 @@ docker run -p 8000:8000 \
 
 ## Benchmarking
 
-Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison. Uses `orjson` for JSON parsing (~3x faster than stdlib json).
+Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison. Uses `orjson` for JSON parsing (~3x faster than stdlib json), connection pooling via `httpx.Limits`, and async background logging.
 
 ### Low load (5 users each, 30s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 560ms | 580ms | +20ms |
-| Mean latency | 589ms | 606ms | +17ms |
-| RPS | 8.4 | 8.2 | -0.2 |
+| P50 latency | 570ms | 570ms | ~0ms |
+| Mean latency | 593ms | 613ms | +20ms |
+| RPS | 8.4 | 8.1 | -0.3 |
 
 ### Medium load (20 users each, 60s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 2400ms | 2500ms | +100ms |
-| Mean latency | 2373ms | 2452ms | +79ms |
-| RPS | 8.2 | 7.9 | -0.3 |
+| P50 latency | 2400ms | 2400ms | ~0ms |
+| Mean latency | 2356ms | 2388ms | +31ms |
+| RPS | 8.3 | 8.1 | -0.2 |
 
-At low load the proxy adds **~17ms mean** overhead. At higher load this becomes negligible compared to backend queueing delay. The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory.
+At low load the proxy adds **~20ms mean** overhead — less than 3% of total request time. At higher load this becomes negligible compared to backend queueing delay (both paths grow from ~590ms to ~2360ms P50). The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory. Token logging is fully async via background worker — no blocking on hot path.
 
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
@@ -131,11 +131,11 @@ Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
 ```
 [users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server 1 :port]
-                       │                   [llama-server 2 :port]
-                       │                   [llama-server N :port]
-                       │
-                       ├── in-memory cache (keys, aliases, routes)
-                        ├── validate API key + resolve routing (SQLite on first call, then cache)
-                        ├── forward request (+ replace auth header)
-                        └── async log tokens + timings (enqueue -> flush to SQLite)
+                        │                   [llama-server 2 :port]
+                        │                   [llama-server N :port]
+                        │
+                        ├── in-memory cache (keys, aliases, routes)
+                         ├── validate API key + resolve routing (SQLite on first call, then cache)
+                         ├── forward request via connection-pooled httpx client
+                         └── async log tokens + timings (background worker, no blocking)
 ```

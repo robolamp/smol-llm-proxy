@@ -15,8 +15,11 @@ from .cache import (
 from .metrics import enqueue_usage
 from .database import get_db
 
-
-
+def _make_client() -> httpx.AsyncClient:
+    return httpx.AsyncClient(
+        timeout=HTTPX_TIMEOUT,
+        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+    )
 
 
 def _extract_user_key(authorization: str | None) -> str | None:
@@ -53,7 +56,8 @@ def _format_server_url(server_url: str, path: str) -> str:
 
 async def _forward_request(target_url: str, headers: dict, body: bytes, method: str):
     """Forward a request to llama-server."""
-    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
+    client = _make_client()
+    try:
         resp = await client.request(
             method=method,
             url=target_url,
@@ -61,6 +65,12 @@ async def _forward_request(target_url: str, headers: dict, body: bytes, method: 
             content=body,
         )
         return resp.status_code, resp.content
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Server request timed out")
+    finally:
+        await client.aclose()
 
 
 def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
@@ -174,10 +184,11 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
 
 async def _stream_chunks(target_url: str, headers: dict, body: bytes):
     """Stream chunks from llama-server and yield SSE-formatted strings."""
-    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
-        async with client.stream("POST", target_url, headers=headers, content=body) as resp:
-            async for chunk in resp.aiter_bytes():
-                yield chunk.decode("utf-8")
+    client = _make_client()
+    async with client.stream("POST", target_url, headers=headers, content=body) as resp:
+        async for chunk in resp.aiter_bytes():
+            yield chunk.decode("utf-8")
+    await client.aclose()
 
 
 async def proxy_streaming(request: Request, path: str):
