@@ -234,9 +234,9 @@ async def admin_get_usage(
 async def proxy_chat_completions(request: Request):
     body = await request.body()
     try:
-        import json
-        data = json.loads(body)
-    except json.JSONDecodeError:
+        import orjson
+        data = orjson.loads(body)
+    except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     is_streaming = data.get("stream", False)
@@ -251,9 +251,9 @@ async def proxy_chat_completions(request: Request):
 async def proxy_completions(request: Request):
     body = await request.body()
     try:
-        import json
-        data = json.loads(body)
-    except json.JSONDecodeError:
+        import orjson
+        data = orjson.loads(body)
+    except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
     is_streaming = data.get("stream", False)

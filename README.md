@@ -12,7 +12,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing (measured ~30-40ms P50 overhead vs direct backend)
+- In-memory cache for keys, aliases, and routing
 
 ## Dependencies
 
@@ -105,18 +105,25 @@ docker run -p 8000:8000 \
 
 ## Benchmarking
 
-Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison.
+Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison. Uses `orjson` for JSON parsing (~3x faster than stdlib json).
 
 ### Low load (5 users each, 30s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 560ms | 590ms | +30ms |
-| P95 latency | ~910ms | ~930ms | +20ms |
-| Mean latency | 571ms | 612ms | +41ms |
-| RPS | 8.66 | 7.96 | -0.7 |
+| P50 latency | 560ms | 580ms | +20ms |
+| Mean latency | 589ms | 606ms | +17ms |
+| RPS | 8.4 | 8.2 | -0.2 |
 
-The proxy adds **~30-40ms** P50 overhead at low load.
+### Medium load (20 users each, 60s)
+
+| Metric | Direct | Through proxy | Overhead |
+|--------|--------|---------------|----------|
+| P50 latency | 2400ms | 2500ms | +100ms |
+| Mean latency | 2373ms | 2452ms | +79ms |
+| RPS | 8.2 | 7.9 | -0.3 |
+
+At low load the proxy adds **~17ms mean** overhead. At higher load this becomes negligible compared to backend queueing delay. The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory.
 
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 

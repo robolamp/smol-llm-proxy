@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Benchmark proxy overhead vs direct llama-server."""
 
-import json
 import os
 import shutil
 import signal
@@ -9,6 +8,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+json = __import__("orjson")
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_DIR = SCRIPT_DIR.parent.parent
@@ -85,7 +86,7 @@ def create_user_key(admin_key: str) -> str:
     url = f"http://localhost:{PROXY_PORT}/admin/keys"
     req = urllib.request.Request(
         url,
-        data=json.dumps({"name": "bench_user", "active": True}).encode(),
+        data=json.dumps({"name": "bench_user", "active": True}),
         headers={"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"},
         method="POST"
     )
@@ -119,24 +120,32 @@ def run_locust(key: str, target: str, is_proxy: bool, direct_url: str, upstream_
 
 def run_both_parallel(key: str, direct_url: str, upstream_key: str, bench_model: str):
     """Run both benchmarks simultaneously on the same backend for fair comparison."""
-    p1 = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_direct.py"),
-         "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
-         "--csv", "/tmp/bench_direct"],
-        env={**os.environ, "BENCH_MODEL": bench_model, "DIRECT_URL": direct_url, "UPSTREAM_KEY": upstream_key},
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
-    p2 = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_proxy.py"),
-         "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
-         "--csv", "/tmp/bench_proxy"],
-        env={**os.environ, "BENCH_MODEL": bench_model,
-             "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key},
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-    )
-    p1.wait()
-    p2.wait()
-    return p1, p2
+    import threading
+
+    def run_and_capture(cmd, env, label):
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        print(f"[{label}] exit={r.returncode}")
+        if r.stdout:
+            for line in r.stdout.splitlines()[-20:]:
+                print(f"  {line}")
+
+    cmd1 = [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_direct.py"),
+            "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
+            "--csv", "/tmp/bench_direct"]
+    env1 = {**os.environ, "BENCH_MODEL": bench_model, "DIRECT_URL": direct_url, "UPSTREAM_KEY": upstream_key}
+
+    cmd2 = [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_proxy.py"),
+            "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
+            "--csv", "/tmp/bench_proxy"]
+    env2 = {**os.environ, "BENCH_MODEL": bench_model,
+            "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key}
+
+    t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
+    t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
 
 def warmup(direct_url: str, upstream_key: str, bench_model: str):
@@ -233,7 +242,7 @@ def main():
         print(f"\n{'='*50}")
         print(f"Running BOTH benchmarks simultaneously ({USERS} users each, {DURATION}s)")
         print(f"{'='*50}")
-        p1, p2 = run_both_parallel(user_key, direct_url, upstream_key, bench_model)
+        run_both_parallel(user_key, direct_url, upstream_key, bench_model)
 
     finally:
         proc.terminate()

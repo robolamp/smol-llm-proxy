@@ -1,7 +1,7 @@
 """Proxy logic: route by model name and forward to llama-server."""
 
 import httpx
-import json
+import orjson
 
 from fastapi import Request, HTTPException
 from fastapi.responses import StreamingResponse, JSONResponse
@@ -66,8 +66,8 @@ async def _forward_request(target_url: str, headers: dict, body: bytes, method: 
 def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
     """Extract tokens and timings from response body JSON."""
     try:
-        data = json.loads(body_bytes)
-    except (json.JSONDecodeError, TypeError):
+        data = orjson.loads(body_bytes)
+    except (orjson.JSONDecodeError, TypeError):
         return 0, 0, 0.0, 0.0
 
     usage = data.get("usage", {})
@@ -92,8 +92,8 @@ async def proxy_non_streaming(request: Request, path: str):
 
     body_bytes = await request.body()
     try:
-        body_json = json.loads(body_bytes)
-    except json.JSONDecodeError:
+        body_json = orjson.loads(body_bytes)
+    except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     model_name = body_json.get("model", "")
@@ -141,7 +141,7 @@ async def proxy_non_streaming(request: Request, path: str):
                   prompt_tokens, completion_tokens, prompt_ms, predicted_ms)
     flush_usage_logs()
 
-    return JSONResponse(content=json.loads(resp_body), status_code=status_code)
+    return JSONResponse(content=orjson.loads(resp_body), status_code=status_code)
 
 
 def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
@@ -152,8 +152,8 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
             stripped = stripped[6:]
         if stripped == "[DONE]":
             return 0, 0, 0.0, 0.0
-        data = json.loads(stripped)
-    except (json.JSONDecodeError, TypeError):
+        data = orjson.loads(stripped)
+    except (orjson.JSONDecodeError, TypeError):
         return 0, 0, 0.0, 0.0
 
     # llama.cpp puts timings at top level in streaming mode
@@ -189,8 +189,8 @@ async def proxy_streaming(request: Request, path: str):
 
     body_bytes = await request.body()
     try:
-        body_json = json.loads(body_bytes)
-    except json.JSONDecodeError:
+        body_json = orjson.loads(body_bytes)
+    except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
     model_name = body_json.get("model", "")
@@ -264,7 +264,7 @@ async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
             status_code, resp_body = await _forward_request(
                 target_url, {}, body, "GET"
             )
-            data = json.loads(resp_body)
+            data = orjson.loads(resp_body)
             if "data" in data:
                 for m in data["data"]:
                     all_models.append(m)
