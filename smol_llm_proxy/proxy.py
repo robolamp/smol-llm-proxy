@@ -9,11 +9,8 @@ from fastapi.responses import StreamingResponse, Response, JSONResponse
 from .config import HTTPX_TIMEOUT
 from .database import get_db, validate_key, resolve_routing
 from .auth import _hash_key
-from .cache import (
-    get_cached_alias, set_cached_alias,
-)
+from .cache import get_cached_alias, set_cached_alias
 from .metrics import enqueue_usage
-from .database import get_db
 
 _httpx_client: httpx.AsyncClient | None = None
 
@@ -23,11 +20,7 @@ def get_httpx_client() -> httpx.AsyncClient:
     if _httpx_client is None or _httpx_client.is_closed:
         _httpx_client = httpx.AsyncClient(
             timeout=HTTPX_TIMEOUT,
-            limits=httpx.Limits(
-                max_connections=100,
-                max_keepalive_connections=20,
-                keepalive_expiry=30.0,
-            ),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
         )
     return _httpx_client
 
@@ -40,25 +33,17 @@ async def shutdown_httpx_client():
 
 
 def _extract_user_key(authorization: str | None) -> str | None:
-    """Extract Bearer token from Authorization header."""
-    if not authorization:
+    if not authorization or not authorization.startswith("Bearer "):
         return None
-    if authorization.startswith("Bearer "):
-        return authorization[7:].strip()
-    return None
+    return authorization[7:].strip()
 
 
 async def _resolve_model(model_name: str) -> tuple[str, str]:
-    """Resolve alias to real model name. Returns (display_name, real_name)."""
     cached = get_cached_alias(model_name)
     if cached:
         return model_name, cached
-
     with get_db() as conn:
-        row = conn.execute(
-            "SELECT real_model_name FROM model_aliases WHERE alias_name = ?",
-            (model_name,),
-        ).fetchone()
+        row = conn.execute("SELECT real_model_name FROM model_aliases WHERE alias_name = ?", (model_name,)).fetchone()
     if row:
         set_cached_alias(model_name, row["real_model_name"])
         return model_name, row["real_model_name"]
@@ -66,21 +51,13 @@ async def _resolve_model(model_name: str) -> tuple[str, str]:
 
 
 def _format_server_url(server_url: str, path: str) -> str:
-    """Ensure server_url has no trailing slash and join with path."""
-    base = server_url.rstrip("/")
-    return f"{base}/{path.lstrip('/')}"
+    return f"{server_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 async def _forward_request(target_url: str, headers: dict, body: bytes, method: str):
-    """Forward a request to llama-server."""
     client = get_httpx_client()
     try:
-        resp = await client.request(
-            method=method,
-            url=target_url,
-            headers=headers,
-            content=body,
-        )
+        resp = await client.request(method=method, url=target_url, headers=headers, content=body)
         return resp.status_code, resp.content
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
@@ -89,87 +66,65 @@ async def _forward_request(target_url: str, headers: dict, body: bytes, method: 
 
 
 def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
-    """Extract tokens and timings from response body JSON."""
     try:
         data = orjson.loads(body_bytes)
     except (orjson.JSONDecodeError, TypeError):
         return 0, 0, 0.0, 0.0
-
     usage = data.get("usage", {})
-    prompt_tokens = 0
-    completion_tokens = 0
-    if isinstance(usage, dict):
-        prompt_tokens = usage.get("prompt_tokens", 0)
-        completion_tokens = usage.get("completion_tokens", 0)
-
+    prompt_tokens = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
+    completion_tokens = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
     timings = data.get("timings", {})
-    prompt_ms = timings.get("prompt_ms", 0.0) or 0.0
-    predicted_ms = timings.get("predicted_ms", 0.0) or 0.0
-
-    return prompt_tokens, completion_tokens, prompt_ms, predicted_ms
+    return prompt_tokens, completion_tokens, timings.get("prompt_ms", 0.0) or 0.0, timings.get("predicted_ms", 0.0) or 0.0
 
 
-async def proxy_non_streaming(request: Request, path: str):
-    """Handle a non-streaming proxy request."""
+async def _build_proxy_context(request: Request, path: str):
+    """Extract auth info, resolve routing. Returns (key_info, routing, display_name, real_model_name, body_json, body_bytes)."""
     user_key = _extract_user_key(request.headers.get("authorization"))
     if not user_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
     body_bytes = await request.body()
     try:
         body_json = orjson.loads(body_bytes)
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
-
     model_name = body_json.get("model", "")
-    key_hash = _hash_key(user_key)
-    key_info = validate_key(key_hash)
+    key_info = validate_key(_hash_key(user_key))
     if not key_info:
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-
     routing = resolve_routing(key_info["id"], model_name)
-
     display_name, real_model_name = await _resolve_model(model_name)
-
     if not routing:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No server configured for model '{display_name}'",
-        )
+        raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes
 
-    server = {
-        "id": routing["server_id"],
-        "name": "",
-        "url": routing["url"],
-        "api_key": routing["api_key"],
-    }
 
+def _build_upstream(server: dict, request: Request, path: str) -> tuple[str, dict]:
     target_url = _format_server_url(server["url"], path)
-
-    upstream_headers = dict(request.headers)
-    upstream_headers.pop("host", None)
-    if server["api_key"]:
+    upstream_headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+    if server.get("api_key"):
         upstream_headers["authorization"] = f"Bearer {server['api_key']}"
+    return target_url, upstream_headers
+
+
+async def proxy_non_streaming(request: Request, path: str):
+    key_info, routing, display_name, real_model_name, body_json, body_bytes = await _build_proxy_context(request, path)
+    server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
+    target_url, upstream_headers = _build_upstream(server, request, path)
 
     try:
-        status_code, resp_body = await _forward_request(
-            target_url, upstream_headers, body_bytes, request.method
-        )
+        status_code, resp_body = await _forward_request(target_url, upstream_headers, body_bytes, request.method)
     except httpx.ConnectError:
         raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
     except httpx.TimeoutException:
         raise HTTPException(status_code=504, detail="Server request timed out")
 
     prompt_tokens, completion_tokens, prompt_ms, predicted_ms = _parse_usage_from_body(resp_body)
-
     enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                   prompt_tokens, completion_tokens, prompt_ms, predicted_ms)
-
     return Response(content=resp_body, status_code=status_code, media_type="application/json")
 
 
 def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
-    """Extract token counts and timings from a single SSE data chunk."""
     try:
         stripped = chunk.strip()
         if stripped.startswith("data: "):
@@ -180,17 +135,12 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
     except (orjson.JSONDecodeError, TypeError):
         return 0, 0, 0.0, 0.0
 
-    # llama.cpp puts timings at top level in streaming mode
     timings = data.get("timings", {})
     if timings and isinstance(timings, dict):
-        prompt_tokens = timings.get("prompt_n", 0) or 0
-        completion_tokens = timings.get("predicted_n", 0) or 0
-        prompt_ms = timings.get("prompt_ms", 0.0) or 0.0
-        predicted_ms = timings.get("predicted_ms", 0.0) or 0.0
-        if prompt_tokens > 0 or completion_tokens > 0:
-            return prompt_tokens, completion_tokens, prompt_ms, predicted_ms
+        pn, cn = timings.get("prompt_n", 0) or 0, timings.get("predicted_n", 0) or 0
+        if pn > 0 or cn > 0:
+            return pn, cn, timings.get("prompt_ms", 0.0) or 0.0, timings.get("predicted_ms", 0.0) or 0.0
 
-    # fallback: standard OpenAI format with top-level usage
     usage = data.get("usage", {})
     if isinstance(usage, dict):
         return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), 0.0, 0.0
@@ -198,58 +148,16 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
 
 
 async def _stream_chunks(target_url: str, headers: dict, body: bytes):
-    """Stream chunks from llama-server and yield SSE-formatted strings."""
-    client = get_httpx_client()
-    try:
+    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
         async with client.stream("POST", target_url, headers=headers, content=body) as resp:
             async for chunk in resp.aiter_bytes():
                 yield chunk.decode("utf-8")
-    except RuntimeError:
-        pass
-    await client.aclose()
 
 
 async def proxy_streaming(request: Request, path: str):
-    """Handle a streaming proxy request."""
-    user_key = _extract_user_key(request.headers.get("authorization"))
-    if not user_key:
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-
-    body_bytes = await request.body()
-    try:
-        body_json = orjson.loads(body_bytes)
-    except orjson.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
-
-    model_name = body_json.get("model", "")
-    key_hash = _hash_key(user_key)
-    key_info = validate_key(key_hash)
-    if not key_info:
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-
-    routing = resolve_routing(key_info["id"], model_name)
-
-    display_name, real_model_name = await _resolve_model(model_name)
-
-    if not routing:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No server configured for model '{display_name}'",
-        )
-
-    server = {
-        "id": routing["server_id"],
-        "name": "",
-        "url": routing["url"],
-        "api_key": routing["api_key"],
-    }
-
-    target_url = _format_server_url(server["url"], path)
-
-    upstream_headers = dict(request.headers)
-    upstream_headers.pop("host", None)
-    if server["api_key"]:
-        upstream_headers["authorization"] = f"Bearer {server['api_key']}"
+    key_info, routing, display_name, real_model_name, body_json, body_bytes = await _build_proxy_context(request, path)
+    server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
+    target_url, upstream_headers = _build_upstream(server, request, path)
 
     total_prompt = 0
     total_completion = 0
@@ -271,16 +179,12 @@ async def proxy_streaming(request: Request, path: str):
             enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                           total_prompt, total_completion, last_prompt_ms, last_predicted_ms)
 
-    resp = StreamingResponse(generate(), media_type="text/event-stream")
-    return resp
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
-    """Forward requests that don't need auth (e.g. /v1/models)."""
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT url, id FROM servers WHERE active = 1"
-        ).fetchall()
+        rows = conn.execute("SELECT url, id FROM servers WHERE active = 1").fetchall()
 
     if not rows:
         raise HTTPException(status_code=503, detail="No active llama-server configured")
@@ -289,13 +193,10 @@ async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
     for row in rows:
         target_url = _format_server_url(row["url"], path)
         try:
-            status_code, resp_body = await _forward_request(
-                target_url, {}, body, "GET"
-            )
+            status_code, resp_body = await _forward_request(target_url, {}, body, "GET")
             data = orjson.loads(resp_body)
             if "data" in data:
-                for m in data["data"]:
-                    all_models.append(m)
+                all_models.extend(data["data"])
         except Exception:
             continue
 

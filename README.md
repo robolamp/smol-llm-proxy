@@ -14,58 +14,17 @@ An API proxy for llama.cpp. Multi-server routing, per-user keys, token accountin
 
 ## Quick Start
 
-### Docker (recommended)
+### Docker Compose (recommended)
 
 ```bash
-cp .env.example .env          # set ADMIN_KEY
+cp .env.example .env                # set ADMIN_KEY
 cp config.example.yaml config.yaml  # fill in your servers
 docker compose up -d --build
 ```
 
-### Pip install (alternative)
+The proxy listens on `0.0.0.0:8000` by default.
 
-```bash
-pip install .
-cp config.example.yaml config.yaml   # fill in your servers
-ADMIN_KEY=secret python -m smol_llm_proxy
-```
-
-The proxy listens on `0.0.0.0:8000` by default. Override with `PROXY_PORT` and `PROXY_HOST` env vars.
-
-## Configuration
-
-Edit `config.yaml` to define servers, models, and aliases. These are loaded into SQLite at startup and persist across restarts.
-
-```yaml
-servers:
-  - name: my-server
-    url: http://host:port
-    api_key: ""
-    models:
-      - model-name.gguf
-
-aliases:
-  alias: model-name.gguf
-```
-
-You can also use `.env` to define database path, admin key and config path:
-
-```bash
-ADMIN_KEY=secret
-PROXY_PORT=8000
-DB_PATH=./data/proxy.db
-CONFIG_PATH=./config.yaml
-```
-
-## Docker
-
-Volumes:
-- `db-data` — SQLite DB persists across container restarts (`/data/proxy.db`)
-- `./config.yaml:/config/config.yaml:ro` — config mounted read-only
-
-Env vars: `ADMIN_KEY`, `PROXY_PORT`, `DB_PATH`, `CONFIG_PATH`
-
-### Dockerfile only
+### Plain Docker
 
 ```bash
 docker build -t smol-llm-proxy .
@@ -75,6 +34,59 @@ docker run -p 8000:8000 \
   -v $(pwd)/config.yaml:/app/config.yaml:ro \
   smol-llm-proxy
 ```
+
+### Pip install
+
+```bash
+pip install .
+cp config.example.yaml config.yaml  # fill in your servers
+ADMIN_KEY=secret python -m smol_llm_proxy
+```
+
+## Configuration
+
+The proxy reads two files: `config.yaml` for routing and `.env` for runtime settings.
+
+### `config.yaml` — servers, models, aliases
+
+Loaded into SQLite at startup, persisted across restarts:
+
+```yaml
+servers:
+  - name: my-server
+    url: http://host:port
+    api_key: ""              # optional, if llama-server requires auth
+    models:
+      - model-name.gguf
+
+aliases:
+  alias: model-name.gguf     # short name -> real model name
+```
+
+### Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `ADMIN_KEY` | required | Bearer token for `/admin/*` endpoints |
+| `PROXY_HOST` | `0.0.0.0` | Listen address |
+| `PROXY_PORT` | `8000` | Listen port |
+| `DB_PATH` | `./data/proxy.db` | SQLite database location |
+| `CONFIG_PATH` | `./config.yaml` | Path to config file |
+
+For `pip install`, set them in shell or via a `.env`-like loader. For Docker Compose, put them in `.env`:
+
+```bash
+ADMIN_KEY=secret
+PROXY_PORT=8000
+```
+
+### Docker volumes
+
+The Compose setup mounts two volumes:
+
+- `db-data:/data` — SQLite database, persists across container restarts
+- `./config.yaml:/config/config.yaml:ro` — config file, read-only
+
 
 ## Admin API
 
