@@ -52,8 +52,8 @@ def client(db_path):
 @pytest.fixture(scope="function")
 def admin_key(client):
     from smol_llm_proxy.auth import create_api_key
-    key = create_api_key("test-user")
-    yield key
+    result = create_api_key("test-user")
+    yield result["key"]
     from smol_llm_proxy.metrics import flush_usage_logs
     flush_usage_logs()
     from smol_llm_proxy.database import get_db

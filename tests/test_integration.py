@@ -43,8 +43,8 @@ def integration_key(client):
     import uuid
     from smol_llm_proxy.auth import create_api_key
     name = f"integration-tester-{uuid.uuid4().hex[:8]}"
-    key = create_api_key(name)
-    yield key
+    result = create_api_key(name)
+    yield result["key"]
     from smol_llm_proxy.database import get_db
     with get_db() as conn:
         key_id = conn.execute(

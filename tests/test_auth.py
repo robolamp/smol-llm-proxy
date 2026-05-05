@@ -13,18 +13,21 @@ def _get_key_id(name):
 
 class TestAuth:
     def test_create_and_validate(self):
-        key = create_api_key("alice")
+        result = create_api_key("alice")
+        key = result["key"]
         assert key.startswith("sk-")
         info = validate_api_key(key)
         assert info is not None and "id" in info
 
     def test_inactive_key_fails_validation(self, client):
-        key = create_api_key("bob")
+        result = create_api_key("bob")
+        key = result["key"]
         toggle_api_key(_get_key_id("bob"), False)
         assert validate_api_key(key) is None
 
     def test_delete_removes_key(self, client):
-        key = create_api_key("charlie")
+        result = create_api_key("charlie")
+        key = result["key"]
         assert delete_api_key(_get_key_id("charlie")) is True
         assert validate_api_key(key) is None
 

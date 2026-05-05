@@ -172,8 +172,8 @@ async def admin_create_key(request: Request, authorization: str | None = Header(
     _check_admin(authorization)
     data = await request.json()
     name = data.get("name", "unnamed")
-    key = create_api_key(name)
-    return {"ok": True, "key": key, "name": name}
+    result = create_api_key(name)
+    return {"ok": True, "id": result["id"], "key": result["key"], "name": result["name"]}
 
 
 @app.delete("/admin/keys/{key_id}")

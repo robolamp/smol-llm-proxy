@@ -15,18 +15,19 @@ def _hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
 
 
-def create_api_key(name: str) -> str:
-    """Create a new API key. Returns the plaintext key once (shown only at creation)."""
+def create_api_key(name: str) -> dict:
+    """Create a new API key. Returns dict with id, key, and name."""
     raw_key = "sk-" + secrets.token_hex(24)
     key_hash = _hash_key(raw_key)
 
     with get_db() as conn:
-        conn.execute(
+        cursor = conn.execute(
             "INSERT INTO api_keys (key_hash, name) VALUES (?, ?)",
             (key_hash, name),
         )
+        key_id = cursor.lastrowid
     clear_key_cache()
-    return raw_key
+    return {"id": key_id, "key": raw_key, "name": name}
 
 
 def _find_key_info(raw_key: str):

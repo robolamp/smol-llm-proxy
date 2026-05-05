@@ -28,6 +28,7 @@ data/*.db-wal
 config.yaml
 .env
 tests/test_servers.yaml
+tests/test_config.yaml
 tests/benchmark/.env.benchmark
 tests/benchmark/config.yaml
 

@@ -4,7 +4,7 @@ import httpx
 import orjson
 
 from fastapi import Request, HTTPException
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, JSONResponse
 
 from .config import HTTPX_TIMEOUT
 from .database import get_db, validate_key, resolve_routing
@@ -65,10 +65,6 @@ async def _forward_request(target_url: str, headers: dict, body: bytes, method: 
             content=body,
         )
         return resp.status_code, resp.content
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Server request timed out")
     finally:
         await client.aclose()
 
@@ -278,7 +274,7 @@ async def proxy_public(body: bytes = b"", path: str = "/v1/models"):
             if "data" in data:
                 for m in data["data"]:
                     all_models.append(m)
-        except httpx.ConnectError:
+        except Exception:
             continue
 
     return JSONResponse(content={"object": "list", "data": all_models}, status_code=200)
