@@ -43,6 +43,37 @@ def env_setup(db_path):
     yield
 
 
+@pytest.fixture(autouse=True)
+def _reset_http_client():
+    """Reset shared httpx client after each test to avoid event loop issues."""
+    yield
+    import asyncio
+    import smol_llm_proxy.proxy
+
+    if smol_llm_proxy.proxy._httpx_client is None:
+        return
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        smol_llm_proxy.proxy._httpx_client = None
+        return
+
+    if loop.is_closed():
+        smol_llm_proxy.proxy._httpx_client = None
+        return
+
+    try:
+        if not loop.is_running():
+            loop.run_until_complete(smol_llm_proxy.proxy._httpx_client.aclose())
+        else:
+            loop.run_until_complete(smol_llm_proxy.proxy._httpx_client.aclose())
+    except Exception:
+        pass
+    finally:
+        smol_llm_proxy.proxy._httpx_client = None
+
+
 @pytest.fixture(scope="session")
 def client(db_path):
     from main import app

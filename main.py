@@ -21,6 +21,8 @@ async def lifespan(app):
     print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
     yield
+    from smol_llm_proxy.proxy import shutdown_httpx_client
+    await shutdown_httpx_client()
     from smol_llm_proxy.metrics import _shutdown_async_logger
     await _shutdown_async_logger()
 

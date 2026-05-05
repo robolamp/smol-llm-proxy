@@ -112,16 +112,26 @@ Proxy overhead measured with Locust against real llama-server backends using **p
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
 | P50 latency | 560ms | 570ms | +10ms |
-| Mean latency | 591ms | 591ms | ~0ms |
-| RPS | 8.4 | 8.4 | ~0 |
+| Mean latency | 596ms | 601ms | +5ms |
+| RPS | 8.3 | 8.3 | ~0 |
 
 ### Medium load (20 users each, 60s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 2300ms | 2300ms | ~0ms |
-| Mean latency | 2297ms | 2329ms | +32ms |
+| P50 latency | ~2300ms | ~2300ms | ~0ms |
+| Mean latency | ~2.3s | ~2.4s | +30ms |
 | RPS | 8.4 | 8.4 | ~0 |
+
+### High load (100 users each, 60s)
+
+| Metric | Direct | Through proxy | Overhead |
+|--------|--------|---------------|----------|
+| P50 latency | ~12-13s | ~12-13s | ~0ms |
+| Mean latency | ~10.1s | ~10.4s | +270ms |
+| RPS | 8.1 | 7.9 | -0.2 |
+
+At low load the proxy adds **~5ms mean** overhead — less than 1% of total request time. The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory. Token logging is fully async via background worker — no blocking on hot path. At higher load the ~270ms mean overhead at 100 concurrent users is just **~2.7%** of total request time (~10s), negligible compared to backend queueing delay.
 
 ### High load (100 users each, 60s)
 

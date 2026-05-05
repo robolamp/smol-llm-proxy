@@ -15,11 +15,28 @@ from .cache import (
 from .metrics import enqueue_usage
 from .database import get_db
 
-def _make_client() -> httpx.AsyncClient:
-    return httpx.AsyncClient(
-        timeout=HTTPX_TIMEOUT,
-        limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-    )
+_httpx_client: httpx.AsyncClient | None = None
+
+
+def get_httpx_client() -> httpx.AsyncClient:
+    global _httpx_client
+    if _httpx_client is None or _httpx_client.is_closed:
+        _httpx_client = httpx.AsyncClient(
+            timeout=HTTPX_TIMEOUT,
+            limits=httpx.Limits(
+                max_connections=100,
+                max_keepalive_connections=20,
+                keepalive_expiry=30.0,
+            ),
+        )
+    return _httpx_client
+
+
+async def shutdown_httpx_client():
+    global _httpx_client
+    if _httpx_client is not None and not _httpx_client.is_closed:
+        await _httpx_client.aclose()
+        _httpx_client = None
 
 
 def _extract_user_key(authorization: str | None) -> str | None:
@@ -56,7 +73,7 @@ def _format_server_url(server_url: str, path: str) -> str:
 
 async def _forward_request(target_url: str, headers: dict, body: bytes, method: str):
     """Forward a request to llama-server."""
-    client = _make_client()
+    client = get_httpx_client()
     try:
         resp = await client.request(
             method=method,
@@ -65,8 +82,10 @@ async def _forward_request(target_url: str, headers: dict, body: bytes, method: 
             content=body,
         )
         return resp.status_code, resp.content
-    finally:
-        await client.aclose()
+    except httpx.ConnectError:
+        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
+    except httpx.TimeoutException:
+        raise HTTPException(status_code=504, detail="Server request timed out")
 
 
 def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
@@ -180,10 +199,13 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
 
 async def _stream_chunks(target_url: str, headers: dict, body: bytes):
     """Stream chunks from llama-server and yield SSE-formatted strings."""
-    client = _make_client()
-    async with client.stream("POST", target_url, headers=headers, content=body) as resp:
-        async for chunk in resp.aiter_bytes():
-            yield chunk.decode("utf-8")
+    client = get_httpx_client()
+    try:
+        async with client.stream("POST", target_url, headers=headers, content=body) as resp:
+            async for chunk in resp.aiter_bytes():
+                yield chunk.decode("utf-8")
+    except RuntimeError:
+        pass
     await client.aclose()
 
 
