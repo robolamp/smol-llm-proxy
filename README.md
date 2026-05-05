@@ -1,6 +1,6 @@
 # smol-llm-proxy
 
-An API proxy for llama.cpp. Multi-server routing, per-user keys, token accounting. Minimal dependencies, ~5ms overhead.
+An API proxy for llama.cpp. Multi-server routing, per-user keys, token accounting in less than 1000 lines of code. Minimal dependencies, ~5ms overhead.
 
 ## Features
 

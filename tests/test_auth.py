@@ -1,8 +1,11 @@
 """Tests for auth module: API key CRUD and validation."""
 
-import pytest
 from smol_llm_proxy.auth import (
-    create_api_key, delete_api_key, toggle_api_key, list_api_keys, validate_api_key,
+    create_api_key,
+    delete_api_key,
+    toggle_api_key,
+    list_api_keys,
+    validate_api_key,
 )
 
 

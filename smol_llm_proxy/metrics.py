@@ -17,7 +17,6 @@ def _init_async_logger():
 
 async def _log_worker():
     """Background worker that flushes usage logs to SQLite in batches."""
-    from .database import get_db
 
     batch = []
     while True:
@@ -36,6 +35,7 @@ async def _log_worker():
 
 def _flush_batch(batch):
     from .database import get_db
+
     with get_db() as conn:
         for item in batch:
             try:
@@ -45,29 +45,47 @@ def _flush_batch(batch):
                        (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens,
                         prompt_ms, predicted_ms)
                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (item["key_id"], item["server_id"], item["model_name"], item["real_model_name"],
-                     item["prompt_tokens"], item["completion_tokens"], total,
-                     item["prompt_ms"], item["predicted_ms"]),
+                    (
+                        item["key_id"],
+                        item["server_id"],
+                        item["model_name"],
+                        item["real_model_name"],
+                        item["prompt_tokens"],
+                        item["completion_tokens"],
+                        total,
+                        item["prompt_ms"],
+                        item["predicted_ms"],
+                    ),
                 )
             except Exception:
                 pass
 
 
-def enqueue_usage(key_id: int, server_id: int, model_name: str, real_model_name: str,
-                  prompt_tokens: int, completion_tokens: int, prompt_ms: float = 0.0, predicted_ms: float = 0.0):
+def enqueue_usage(
+    key_id: int,
+    server_id: int,
+    model_name: str,
+    real_model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    prompt_ms: float = 0.0,
+    predicted_ms: float = 0.0,
+):
     """Non-blocking usage logging via async queue."""
     if _usage_queue is None:
         _init_async_logger()
-    _usage_queue.put_nowait({
-        "key_id": key_id,
-        "server_id": server_id,
-        "model_name": model_name,
-        "real_model_name": real_model_name,
-        "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens,
-        "prompt_ms": prompt_ms,
-        "predicted_ms": predicted_ms,
-    })
+    _usage_queue.put_nowait(
+        {
+            "key_id": key_id,
+            "server_id": server_id,
+            "model_name": model_name,
+            "real_model_name": real_model_name,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "prompt_ms": prompt_ms,
+            "predicted_ms": predicted_ms,
+        }
+    )
 
 
 async def _shutdown_async_logger():
@@ -109,8 +127,17 @@ def flush_usage_logs():
         _flush_batch(batch)
 
 
-def log_usage(conn, key_id: int, server_id: int, model_name: str, real_model_name: str,
-              prompt_tokens: int, completion_tokens: int, prompt_ms: float = 0.0, predicted_ms: float = 0.0):
+def log_usage(
+    conn,
+    key_id: int,
+    server_id: int,
+    model_name: str,
+    real_model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    prompt_ms: float = 0.0,
+    predicted_ms: float = 0.0,
+):
     """Write a usage log entry directly to an open connection."""
     total = prompt_tokens + completion_tokens
     conn.execute(
@@ -118,8 +145,17 @@ def log_usage(conn, key_id: int, server_id: int, model_name: str, real_model_nam
            (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens,
             prompt_ms, predicted_ms)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total,
-         prompt_ms, predicted_ms),
+        (
+            key_id,
+            server_id,
+            model_name,
+            real_model_name,
+            prompt_tokens,
+            completion_tokens,
+            total,
+            prompt_ms,
+            predicted_ms,
+        ),
     )
 
 
@@ -158,6 +194,7 @@ def get_usage_logs(key_id=None, server_id=None, start_date=None, end_date=None):
     """
 
     from .database import get_db
+
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]
@@ -191,6 +228,7 @@ def get_usage_summary(key_id=None, server_id=None):
     """
 
     from .database import get_db
+
     with get_db() as conn:
         rows = conn.execute(query, params).fetchall()
         return [dict(r) for r in rows]

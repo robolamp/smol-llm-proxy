@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 # ── Admin request/response models ──────────────────────────────────────
 
+
 class CreateServerRequest(BaseModel):
     name: str
     url: str
@@ -38,6 +39,7 @@ class UsageFilter(BaseModel):
 
 
 # ── Proxy request/response models (OpenAI-compatible) ─────────────────
+
 
 class ChatMessage(BaseModel):
     role: str
@@ -79,6 +81,7 @@ class EmbeddingRequest(BaseModel):
 
 
 # ── Proxy response models (OpenAI-compatible) ─────────────────────────
+
 
 class Usage(BaseModel):
     prompt_tokens: int = 0

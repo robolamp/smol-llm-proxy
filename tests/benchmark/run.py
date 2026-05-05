@@ -2,7 +2,6 @@
 """Benchmark proxy overhead vs direct llama-server."""
 
 import os
-import shutil
 import signal
 import subprocess
 import sys
@@ -42,6 +41,7 @@ def read_env(key: str) -> str:
 
 def load_config():
     import yaml
+
     with open(CONFIG_PATH) as f:
         data = yaml.safe_load(f)
     srv = data["servers"][0]
@@ -52,8 +52,7 @@ def wait_for_proxy(timeout=30):
     for i in range(timeout):
         try:
             r = subprocess.run(
-                ["curl", "-s", f"http://localhost:{PROXY_PORT}/health"],
-                capture_output=True, text=True, timeout=2
+                ["curl", "-s", f"http://localhost:{PROXY_PORT}/health"], capture_output=True, text=True, timeout=2
             )
             if r.returncode == 0 and "ok" in r.stdout:
                 return True
@@ -73,22 +72,24 @@ def start_proxy(admin_key: str):
 
     log_path = "/tmp/proxy_bench.log"
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "main:app",
-         "--host", "0.0.0.0", "--port", str(PROXY_PORT)],
-        env=env, cwd=str(PROJECT_DIR),
-        stdout=open(log_path, "w"), stderr=subprocess.STDOUT
+        [str(VENV_PYTHON), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(PROXY_PORT)],
+        env=env,
+        cwd=str(PROJECT_DIR),
+        stdout=open(log_path, "w"),
+        stderr=subprocess.STDOUT,
     )
     return proc
 
 
 def create_user_key(admin_key: str) -> str:
     import urllib.request
+
     url = f"http://localhost:{PROXY_PORT}/admin/keys"
     req = urllib.request.Request(
         url,
         data=json.dumps({"name": "bench_user", "active": True}),
         headers={"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"},
-        method="POST"
+        method="POST",
     )
     with urllib.request.urlopen(req) as resp:
         return json.loads(resp.read())["key"]
@@ -108,10 +109,20 @@ def run_locust(key: str, target: str, is_proxy: bool, direct_url: str, upstream_
     locust_file = LOCUSTFILE if is_proxy else str(SCRIPT_DIR / "locust_direct.py")
 
     cmd = [
-        str(VENV_PYTHON), "-m", "locust", "-f", locust_file,
-        "--headless", "-u", str(USERS), "-r", "10",
-        "-t", f"{DURATION}s",
-        "--csv", f"/tmp/bench_{target}",
+        str(VENV_PYTHON),
+        "-m",
+        "locust",
+        "-f",
+        locust_file,
+        "--headless",
+        "-u",
+        str(USERS),
+        "-r",
+        "10",
+        "-t",
+        f"{DURATION}s",
+        "--csv",
+        f"/tmp/bench_{target}",
     ]
 
     result = subprocess.run(cmd, env=env, capture_output=True, text=True)
@@ -129,16 +140,41 @@ def run_both_parallel(key: str, direct_url: str, upstream_key: str, bench_model:
             for line in r.stdout.splitlines()[-20:]:
                 print(f"  {line}")
 
-    cmd1 = [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_direct.py"),
-            "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
-            "--csv", "/tmp/bench_direct"]
+    cmd1 = [
+        str(VENV_PYTHON),
+        "-m",
+        "locust",
+        "-f",
+        str(SCRIPT_DIR / "locust_direct.py"),
+        "--headless",
+        "-u",
+        str(USERS),
+        "-r",
+        "10",
+        "-t",
+        f"{DURATION}s",
+        "--csv",
+        "/tmp/bench_direct",
+    ]
     env1 = {**os.environ, "BENCH_MODEL": bench_model, "DIRECT_URL": direct_url, "UPSTREAM_KEY": upstream_key}
 
-    cmd2 = [str(VENV_PYTHON), "-m", "locust", "-f", str(SCRIPT_DIR / "locust_proxy.py"),
-            "--headless", "-u", str(USERS), "-r", "10", "-t", f"{DURATION}s",
-            "--csv", "/tmp/bench_proxy"]
-    env2 = {**os.environ, "BENCH_MODEL": bench_model,
-            "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key}
+    cmd2 = [
+        str(VENV_PYTHON),
+        "-m",
+        "locust",
+        "-f",
+        str(SCRIPT_DIR / "locust_proxy.py"),
+        "--headless",
+        "-u",
+        str(USERS),
+        "-r",
+        "10",
+        "-t",
+        f"{DURATION}s",
+        "--csv",
+        "/tmp/bench_proxy",
+    ]
+    env2 = {**os.environ, "BENCH_MODEL": bench_model, "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key}
 
     t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
     t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
@@ -151,6 +187,7 @@ def run_both_parallel(key: str, direct_url: str, upstream_key: str, bench_model:
 def warmup(direct_url: str, upstream_key: str, bench_model: str):
     """Send a few requests to warm up the backend."""
     import urllib.request
+
     for _ in range(3):
         try:
             data = json.dumps({"model": bench_model, "messages": [{"role": "user", "content": "hi"}]}).encode()
@@ -158,7 +195,7 @@ def warmup(direct_url: str, upstream_key: str, bench_model: str):
                 f"{direct_url}/v1/chat/completions",
                 data=data,
                 headers={"Authorization": f"Bearer {upstream_key}", "Content-Type": "application/json"},
-                method="POST"
+                method="POST",
             )
             with urllib.request.urlopen(req, timeout=30) as resp:
                 resp.read()
@@ -239,9 +276,9 @@ def main():
 
     try:
         # Run both benchmarks SIMULTANEOUSLY for fair comparison
-        print(f"\n{'='*50}")
+        print(f"\n{'=' * 50}")
         print(f"Running BOTH benchmarks simultaneously ({USERS} users each, {DURATION}s)")
-        print(f"{'='*50}")
+        print(f"{'=' * 50}")
         run_both_parallel(user_key, direct_url, upstream_key, bench_model)
 
     finally:
@@ -252,9 +289,9 @@ def main():
     direct_stats = parse_result("direct")
     proxy_stats = parse_result("proxy")
 
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print("Results comparison")
-    print(f"{'='*50}")
+    print(f"{'=' * 50}")
 
     if not direct_stats or not proxy_stats:
         print("Could not parse results from CSV files")
@@ -272,7 +309,7 @@ def main():
     overhead_rps = proxy_stats["rps"] - direct_stats["rps"]
 
     print(f"\n{'Metric':<15} {'Direct':>12} {'Proxy':>14} {'Overhead':>10}")
-    print(f"{'-'*15} {'-'*12} {'-'*14} {'-'*10}")
+    print(f"{'-' * 15} {'-' * 12} {'-' * 14} {'-' * 10}")
     print(f"{'P50 latency':<15} {ms(direct_stats['t50']):>12} {ms(proxy_stats['t50']):>14} {overhead_p50:>+9.0f}ms")
     print(f"{'P95 latency':<15} {ms(direct_stats['t95']):>12} {ms(proxy_stats['t95']):>14} {overhead_p95:>+9.0f}ms")
     print(f"{'Mean latency':<15} {ms(direct_stats['avg']):>12} {ms(proxy_stats['avg']):>14} {overhead_mean:>+9.0f}ms")

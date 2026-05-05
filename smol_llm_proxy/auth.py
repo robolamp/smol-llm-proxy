@@ -75,9 +75,7 @@ def toggle_api_key(key_id: int, active: bool):
 def list_api_keys() -> list[dict]:
     """List all API keys (never returns key hashes)."""
     with get_db() as conn:
-        rows = conn.execute(
-            "SELECT id, name, active, created_at FROM api_keys ORDER BY created_at DESC"
-        ).fetchall()
+        rows = conn.execute("SELECT id, name, active, created_at FROM api_keys ORDER BY created_at DESC").fetchall()
     return [_row_to_dict(r) for r in rows]
 
 

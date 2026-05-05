@@ -74,7 +74,12 @@ def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
     prompt_tokens = usage.get("prompt_tokens", 0) if isinstance(usage, dict) else 0
     completion_tokens = usage.get("completion_tokens", 0) if isinstance(usage, dict) else 0
     timings = data.get("timings", {})
-    return prompt_tokens, completion_tokens, timings.get("prompt_ms", 0.0) or 0.0, timings.get("predicted_ms", 0.0) or 0.0
+    return (
+        prompt_tokens,
+        completion_tokens,
+        timings.get("prompt_ms", 0.0) or 0.0,
+        timings.get("predicted_ms", 0.0) or 0.0,
+    )
 
 
 async def _build_proxy_context(request: Request, path: str):
@@ -119,8 +124,16 @@ async def proxy_non_streaming(request: Request, path: str):
         raise HTTPException(status_code=504, detail="Server request timed out")
 
     prompt_tokens, completion_tokens, prompt_ms, predicted_ms = _parse_usage_from_body(resp_body)
-    enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
-                  prompt_tokens, completion_tokens, prompt_ms, predicted_ms)
+    enqueue_usage(
+        key_info["id"],
+        routing["server_id"],
+        display_name,
+        real_model_name,
+        prompt_tokens,
+        completion_tokens,
+        prompt_ms,
+        predicted_ms,
+    )
     return Response(content=resp_body, status_code=status_code, media_type="application/json")
 
 
@@ -176,8 +189,16 @@ async def proxy_streaming(request: Request, path: str):
                     last_predicted_ms = pr
                 yield chunk
         finally:
-            enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
-                          total_prompt, total_completion, last_prompt_ms, last_predicted_ms)
+            enqueue_usage(
+                key_info["id"],
+                routing["server_id"],
+                display_name,
+                real_model_name,
+                total_prompt,
+                total_completion,
+                last_prompt_ms,
+                last_predicted_ms,
+            )
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

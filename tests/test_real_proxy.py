@@ -1,8 +1,6 @@
 """Integration tests: start real uvicorn proxy and verify all endpoints."""
 
-import json
 import os
-import signal
 import subprocess
 import sys
 import tempfile
@@ -25,6 +23,7 @@ BASE_URL = None
 def _find_free_port():
     """Find a free TCP port."""
     import socket
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
@@ -41,8 +40,7 @@ def _start_proxy(port, db_path, config_path):
     project_dir = Path(__file__).resolve().parent.parent
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app",
-         "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port)],
         env=env,
         cwd=str(project_dir),
         stdout=subprocess.PIPE,
@@ -93,6 +91,7 @@ def proxy_setup():
     _stop_proxy(UVICORN_PROC)
     # Clean up temp dir
     import shutil
+
     db_dir = Path(DB_PATH).parent
     if db_dir.exists():
         shutil.rmtree(db_dir)

@@ -1,6 +1,5 @@
 """Integration tests: full flow with real llama-server backends."""
 
-import json
 import pytest
 import httpx
 import threading
@@ -11,6 +10,7 @@ def _load_test_servers():
     """Load llama-server URLs from YAML config."""
     try:
         import yaml
+
         with open("tests/test_servers.yaml") as f:
             data = yaml.safe_load(f)
         return {s["port"]: s["url"] for s in data.get("servers", [])}
@@ -42,14 +42,14 @@ def integration_key(client):
     """Create a dedicated key for integration tests."""
     import uuid
     from smol_llm_proxy.auth import create_api_key
+
     name = f"integration-tester-{uuid.uuid4().hex[:8]}"
     result = create_api_key(name)
     yield result["key"]
     from smol_llm_proxy.database import get_db
+
     with get_db() as conn:
-        key_id = conn.execute(
-            "SELECT id FROM api_keys WHERE name = ?", (name,)
-        ).fetchone()
+        key_id = conn.execute("SELECT id FROM api_keys WHERE name = ?", (name,)).fetchone()
         if key_id:
             conn.execute("DELETE FROM usage_logs WHERE key_id = ?", (key_id["id"],))
             conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id["id"],))
@@ -193,11 +193,11 @@ class TestStreaming:
         chunks = list(resp.iter_lines())
         # Should have multiple SSE data lines + [DONE]
         assert len(chunks) >= 2
-        data_chunks = [c for c in chunks if c.startswith("data: ")]
         done_chunks = [c for c in chunks if "[DONE]" in c]
         assert len(done_chunks) == 1
 
         from smol_llm_proxy.metrics import flush_usage_logs
+
         flush_usage_logs()
 
 
@@ -251,6 +251,7 @@ class TestUsageLogging:
         )
 
         from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+
         flush_usage_logs()
         logs = get_usage_logs()
         assert len(logs) >= 1
@@ -283,6 +284,7 @@ class TestUsageLogging:
             )
 
         from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+
         flush_usage_logs()
         logs = get_usage_logs()
         assert len(logs) >= 1
@@ -320,13 +322,13 @@ class TestUsageLogging:
             )
 
         from smol_llm_proxy.metrics import flush_usage_logs
+
         flush_usage_logs()
 
         from smol_llm_proxy.database import get_db
+
         with get_db() as conn:
-            key_id = conn.execute(
-                "SELECT id FROM api_keys ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()["id"]
+            key_id = conn.execute("SELECT id FROM api_keys ORDER BY created_at DESC LIMIT 1").fetchone()["id"]
             logs = conn.execute(
                 "SELECT * FROM usage_logs WHERE key_id = ? ORDER BY created_at DESC",
                 (key_id,),

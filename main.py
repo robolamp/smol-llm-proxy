@@ -6,30 +6,39 @@ from fastapi.responses import Response
 from smol_llm_proxy.config import ADMIN_KEY, PROXY_HOST, PROXY_PORT
 from smol_llm_proxy.database import init_db, get_db
 from smol_llm_proxy.auth import (
-    create_api_key, delete_api_key, toggle_api_key, list_api_keys,
+    create_api_key,
+    delete_api_key,
+    toggle_api_key,
+    list_api_keys,
 )
 from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_public
-from smol_llm_proxy.cache import clear_key_cache, clear_alias_cache, clear_route_cache, clear_all
+from smol_llm_proxy.cache import clear_alias_cache, clear_route_cache
 
 from contextlib import asynccontextmanager
+
 
 @asynccontextmanager
 async def lifespan(app):
     init_db()
     from smol_llm_proxy.config_loader import sync_config, CONFIG_PATH
     import os
+
     print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
     yield
     from smol_llm_proxy.proxy import shutdown_httpx_client
+
     await shutdown_httpx_client()
     from smol_llm_proxy.metrics import _shutdown_async_logger
+
     await _shutdown_async_logger()
+
 
 app = FastAPI(title="smol-llm-proxy", lifespan=lifespan)
 
 
 # ── Admin helpers ────────────────────────────────────────────────────────
+
 
 def _check_admin(authorization: str | None):
     """Validate admin Bearer token."""
@@ -41,6 +50,7 @@ def _check_admin(authorization: str | None):
 
 
 # ── Admin: servers ───────────────────────────────────────────────────────
+
 
 @app.post("/admin/servers")
 async def admin_create_server(request: Request, authorization: str | None = Header(None)):
@@ -97,6 +107,7 @@ async def admin_update_server(server_id: int, request: Request, authorization: s
 
 # ── Admin: server models (routing) ───────────────────────────────────────
 
+
 @app.post("/admin/servers/{server_id}/models")
 async def admin_assign_model(server_id: int, request: Request, authorization: str | None = Header(None)):
     _check_admin(authorization)
@@ -129,6 +140,7 @@ async def admin_unassign_model(server_id: int, model_name: str, authorization: s
 
 
 # ── Admin: model aliases ─────────────────────────────────────────────────
+
 
 @app.post("/admin/aliases")
 async def admin_create_alias(request: Request, authorization: str | None = Header(None)):
@@ -169,6 +181,7 @@ async def admin_list_aliases(authorization: str | None = Header(None)):
 
 # ── Admin: API keys ──────────────────────────────────────────────────────
 
+
 @app.post("/admin/keys")
 async def admin_create_key(request: Request, authorization: str | None = Header(None)):
     _check_admin(authorization)
@@ -206,6 +219,7 @@ async def admin_list_keys(authorization: str | None = Header(None)):
 
 # ── Admin: usage / metrics ───────────────────────────────────────────────
 
+
 @app.get("/admin/usage")
 async def admin_get_usage(
     key_id: str | None = None,
@@ -234,11 +248,13 @@ async def admin_get_usage(
 
 # ── Proxy: chat completions ──────────────────────────────────────────────
 
+
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
     body = await request.body()
     try:
         import orjson
+
         data = orjson.loads(body)
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
@@ -251,11 +267,13 @@ async def proxy_chat_completions(request: Request):
 
 # ── Proxy: completions ───────────────────────────────────────────────────
 
+
 @app.post("/v1/completions")
 async def proxy_completions(request: Request):
     body = await request.body()
     try:
         import orjson
+
         data = orjson.loads(body)
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
@@ -268,12 +286,14 @@ async def proxy_completions(request: Request):
 
 # ── Proxy: embeddings ────────────────────────────────────────────────────
 
+
 @app.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
     return await proxy_non_streaming(request, "v1/embeddings")
 
 
 # ── Proxy: models (public) ───────────────────────────────────────────────
+
 
 @app.get("/v1/models")
 async def proxy_models():
@@ -282,9 +302,11 @@ async def proxy_models():
 
 # ── Health ───────────────────────────────────────────────────────────────
 
+
 @app.get("/health")
 async def health():
     from smol_llm_proxy.database import get_db
+
     try:
         with get_db() as conn:
             servers = conn.execute("SELECT COUNT(*) as cnt FROM servers WHERE active = 1").fetchone()["cnt"]
@@ -295,4 +317,5 @@ async def health():
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT)
