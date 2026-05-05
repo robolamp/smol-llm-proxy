@@ -250,7 +250,8 @@ class TestUsageLogging:
             },
         )
 
-        from smol_llm_proxy.metrics import get_usage_logs
+        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        flush_usage_logs()
         logs = get_usage_logs()
         assert len(logs) >= 1
         last = logs[0]

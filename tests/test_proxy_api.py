@@ -85,7 +85,8 @@ class TestUsageLogging:
                 json={"model": server_with_model["model_name"], "messages": [{"role": "user", "content": "hi"}]},
             )
 
-        from smol_llm_proxy.metrics import get_usage_logs
+        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        flush_usage_logs()
         logs = get_usage_logs()
         last = logs[0]
         assert last["prompt_tokens"] == 10
@@ -118,7 +119,8 @@ class TestAliasResolution:
 
         assert resp.status_code == 200
 
-        from smol_llm_proxy.metrics import get_usage_logs
+        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        flush_usage_logs()
         last = get_usage_logs()[0]
         assert last["model_name"] == alias
         assert last["real_model_name"] == server_with_model["model_name"]

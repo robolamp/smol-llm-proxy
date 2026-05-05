@@ -38,16 +38,19 @@ def _flush_batch(batch):
     from .database import get_db
     with get_db() as conn:
         for item in batch:
-            total = item["prompt_tokens"] + item["completion_tokens"]
-            conn.execute(
-                """INSERT INTO usage_logs
-                   (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens,
-                    prompt_ms, predicted_ms)
-                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (item["key_id"], item["server_id"], item["model_name"], item["real_model_name"],
-                 item["prompt_tokens"], item["completion_tokens"], total,
-                 item["prompt_ms"], item["predicted_ms"]),
-            )
+            try:
+                total = item["prompt_tokens"] + item["completion_tokens"]
+                conn.execute(
+                    """INSERT INTO usage_logs
+                       (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens,
+                        prompt_ms, predicted_ms)
+                      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (item["key_id"], item["server_id"], item["model_name"], item["real_model_name"],
+                     item["prompt_tokens"], item["completion_tokens"], total,
+                     item["prompt_ms"], item["predicted_ms"]),
+                )
+            except Exception:
+                pass
 
 
 def enqueue_usage(key_id: int, server_id: int, model_name: str, real_model_name: str,
@@ -65,6 +68,30 @@ def enqueue_usage(key_id: int, server_id: int, model_name: str, real_model_name:
         "prompt_ms": prompt_ms,
         "predicted_ms": predicted_ms,
     })
+
+
+async def _shutdown_async_logger():
+    """Flush all pending logs and stop the background worker on shutdown."""
+    global _logger_task
+    if _usage_queue is None:
+        return
+    # Drain queue and write remaining items
+    batch = []
+    try:
+        while True:
+            item = _usage_queue.get_nowait()
+            batch.append(item)
+    except asyncio.QueueEmpty:
+        pass
+    if batch:
+        _flush_batch(batch)
+    # Cancel the worker task
+    if _logger_task and not _logger_task.done():
+        _logger_task.cancel()
+        try:
+            await _logger_task
+        except asyncio.CancelledError:
+            pass
 
 
 def flush_usage_logs():

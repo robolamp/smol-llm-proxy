@@ -1,7 +1,7 @@
 """FastAPI application with admin and proxy endpoints."""
 
 from fastapi import FastAPI, Request, Header, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import Response
 
 from smol_llm_proxy.config import ADMIN_KEY, PROXY_HOST, PROXY_PORT
 from smol_llm_proxy.database import init_db, get_db
@@ -21,6 +21,8 @@ async def lifespan(app):
     print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
     yield
+    from smol_llm_proxy.metrics import _shutdown_async_logger
+    await _shutdown_async_logger()
 
 app = FastAPI(title="smol-llm-proxy", lifespan=lifespan)
 
@@ -51,7 +53,7 @@ async def admin_create_server(request: Request, authorization: str | None = Head
     except Exception:
         raise HTTPException(status_code=409, detail="Server with this name already exists")
     clear_route_cache()
-    return JSONResponse({"ok": True, "id": cursor.lastrowid})
+    return {"ok": True, "id": cursor.lastrowid}
 
 
 @app.get("/admin/servers")
@@ -171,7 +173,7 @@ async def admin_create_key(request: Request, authorization: str | None = Header(
     data = await request.json()
     name = data.get("name", "unnamed")
     key = create_api_key(name)
-    return JSONResponse({"ok": True, "key": key, "name": name})
+    return {"ok": True, "key": key, "name": name}
 
 
 @app.delete("/admin/keys/{key_id}")
@@ -286,7 +288,7 @@ async def health():
             servers = conn.execute("SELECT COUNT(*) as cnt FROM servers WHERE active = 1").fetchone()["cnt"]
         return {"status": "ok", "active_servers": servers}
     except Exception:
-        return JSONResponse({"status": "error"}, status_code=503)
+        return Response(content='{"status":"error"}', media_type="application/json", status_code=503)
 
 
 if __name__ == "__main__":

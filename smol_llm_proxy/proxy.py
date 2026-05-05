@@ -4,7 +4,7 @@ import httpx
 import orjson
 
 from fastapi import Request, HTTPException
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, Response
 
 from .config import HTTPX_TIMEOUT
 from .database import get_db, validate_key, resolve_routing
@@ -12,7 +12,7 @@ from .auth import _hash_key
 from .cache import (
     get_cached_alias, set_cached_alias,
 )
-from .metrics import enqueue_usage, flush_usage_logs
+from .metrics import enqueue_usage
 from .database import get_db
 
 
@@ -139,9 +139,8 @@ async def proxy_non_streaming(request: Request, path: str):
 
     enqueue_usage(key_info["id"], routing["server_id"], display_name, real_model_name,
                   prompt_tokens, completion_tokens, prompt_ms, predicted_ms)
-    flush_usage_logs()
 
-    return JSONResponse(content=orjson.loads(resp_body), status_code=status_code)
+    return Response(content=resp_body, status_code=status_code, media_type="application/json")
 
 
 def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
