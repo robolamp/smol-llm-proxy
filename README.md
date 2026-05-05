@@ -111,27 +111,27 @@ Proxy overhead measured with Locust against real llama-server backends using **p
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 540ms | 560ms | +20ms |
-| Mean latency | 560ms | 583ms | +24ms |
-| RPS | 8.9 | 8.5 | -0.4 |
+| P50 latency | 560ms | 570ms | +10ms |
+| Mean latency | 591ms | 591ms | ~0ms |
+| RPS | 8.4 | 8.4 | ~0 |
 
 ### Medium load (20 users each, 60s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 2500ms | 2500ms | ~0ms |
-| Mean latency | 2399ms | 2443ms | +43ms |
-| RPS | 8.1 | 8.0 | -0.2 |
+| P50 latency | 2300ms | 2300ms | ~0ms |
+| Mean latency | 2297ms | 2329ms | +32ms |
+| RPS | 8.4 | 8.4 | ~0 |
 
 ### High load (100 users each, 60s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 13000ms | 13000ms | ~0ms |
-| Mean latency | 10125ms | 10392ms | +267ms |
+| P50 latency | ~12-13s | ~12-13s | ~0ms |
+| Mean latency | ~10.1s | ~10.4s | +270ms |
 | RPS | 8.1 | 7.9 | -0.2 |
 
-At low load the proxy adds **~24ms mean** overhead — less than 4% of total request time. At higher load this becomes negligible compared to backend queueing delay (both paths grow from ~560ms to ~13000ms P50). The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory. Token logging is fully async via background worker — no blocking on hot path.
+At low load the proxy adds **~10-24ms mean** overhead — less than 4% of total request time.
 
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
