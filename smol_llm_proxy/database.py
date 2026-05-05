@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from contextlib import contextmanager
 
-from .config import DB_PATH
+from .config import get_db_path
 
 
 def _row_to_dict(row):
@@ -21,7 +21,7 @@ def _get_connection(db_path: Path) -> sqlite3.Connection:
 
 @contextmanager
 def get_db():
-    conn = _get_connection(DB_PATH)
+    conn = _get_connection(get_db_path())
     try:
         yield conn
         conn.commit()
@@ -60,7 +60,7 @@ def resolve_routing(key_id: int, model_name: str):
 
 
 def init_db():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    get_db_path().parent.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS servers (

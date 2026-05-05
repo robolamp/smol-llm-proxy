@@ -8,11 +8,11 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 
 - Per-user API keys (create / delete / toggle active)
 - Multi-server routing by model name
-- Model aliases (`alias` → `model-name.gguf`)
+- Model aliases (`alias` -> `model-name.gguf`)
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing (~10ms overhead)
+- In-memory cache for keys, aliases, and routing (measured ~30-40ms P50 overhead vs direct backend)
 
 ## Dependencies
 
@@ -105,29 +105,20 @@ docker run -p 8000:8000 \
 
 ## Benchmarking
 
-Proxy overhead measured with Locust against real llama-server backends.
+Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison.
 
-### Low load (5 concurrent users)
-
-| Metric | Direct | Through proxy | Overhead |
-|--------|--------|---------------|----------|
-| P50 latency | 270ms | 280ms | +10ms |
-| P95 latency | 640ms | 670ms | +30ms |
-| Mean latency | 311ms | 323ms | +12ms |
-| RPS | 16.0 | 15.4 | -0.6 |
-
-### Medium load (20 concurrent users)
+### Low load (5 users each, 30s)
 
 | Metric | Direct | Through proxy | Overhead |
 |--------|--------|---------------|----------|
-| P50 latency | 1200ms | 1200ms | ~0 |
-| P95 latency | 1600ms | 1600ms | ~0 |
-| Mean latency | 1235ms | 1269ms | +34ms |
-| RPS | 15.9 | 15.5 | -0.4 |
+| P50 latency | 560ms | 590ms | +30ms |
+| P95 latency | ~910ms | ~930ms | +20ms |
+| Mean latency | 571ms | 612ms | +41ms |
+| RPS | 8.66 | 7.96 | -0.7 |
 
-At low load proxy adds **~10ms** overhead per request. At higher load this becomes negligible compared to backend queueing delay. The proxy uses in-memory caching for keys, aliases, and routing — hot path touches SQLite only once for async logging.
+The proxy adds **~30-40ms** P50 overhead at low load.
 
-Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
+Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
 ## Architecture
 
@@ -137,7 +128,7 @@ Run your own benchmarks: `bash tests/benchmark/run.sh [low|medium|high]`
                        │                   [llama-server N :port]
                        │
                        ├── in-memory cache (keys, aliases, routes)
-                       ├── validate API key + resolve routing (1 SQLite connection)
-                       ├── forward request (+ replace auth header)
-                       └── async log tokens + timings (background worker)
+                        ├── validate API key + resolve routing (SQLite on first call, then cache)
+                        ├── forward request (+ replace auth header)
+                        └── async log tokens + timings (enqueue -> flush to SQLite)
 ```

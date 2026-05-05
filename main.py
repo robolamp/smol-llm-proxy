@@ -16,7 +16,9 @@ from contextlib import asynccontextmanager
 @asynccontextmanager
 async def lifespan(app):
     init_db()
-    from smol_llm_proxy.config_loader import sync_config
+    from smol_llm_proxy.config_loader import sync_config, CONFIG_PATH
+    import os
+    print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
     yield
 

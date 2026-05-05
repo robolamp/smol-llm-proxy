@@ -29,6 +29,7 @@ config.yaml
 .env
 tests/test_servers.yaml
 tests/benchmark/.env.benchmark
+tests/benchmark/config.yaml
 
 # OS
 .DS_Store
