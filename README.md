@@ -12,7 +12,7 @@ Routes requests to multiple llama-servers based on model name, tracks token cons
 - Token usage logging: prompt/completion tokens, timings, TPS
 - Streaming and non-streaming proxy support
 - SQLite backend (zero external DB dependencies)
-- In-memory cache for keys, aliases, and routing (~20ms mean overhead)
+- In-memory cache for keys, aliases, and routing (~5ms mean overhead)
 
 ## Dependencies
 
@@ -26,12 +26,19 @@ sqlite3  — stdlib, built-in database
 
 ## Quick Start
 
-```bash
-# Install dependencies and the package itself
-pip install fastapi uvicorn httpx pydantic pyyaml
-pip install .
+### Docker (recommended)
 
-# Edit config.yaml with your llama-server URLs, then run
+```bash
+cp .env.example .env          # set ADMIN_KEY
+cp config.example.yaml config.yaml  # fill in your servers
+docker compose up -d --build
+```
+
+### Pip install
+
+```bash
+pip install .
+cp config.example.yaml config.yaml  # отредактируй под свои серверы
 ADMIN_KEY=secret python -m smol_llm_proxy
 ```
 
@@ -55,17 +62,24 @@ aliases:
 
 ## Admin API
 
+All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
+
 | Endpoint | Method | Description |
 |----------|--------|-------------|
+| `/admin/servers` | `GET` | List all registered servers |
 | `/admin/servers` | `POST` | Register a llama-server |
 | `/admin/servers/{id}` | `DELETE` / `PATCH` | Remove or update server |
 | `/admin/servers/{id}/models` | `POST` / `DELETE` | Assign/unassign model name |
+| `/admin/keys` | `GET` | List all API keys |
 | `/admin/keys` | `POST` | Create user key |
-| `/admin/keys/{key}` | `DELETE` | Revoke key |
-| `/admin/keys/{key}/toggle` | `PATCH` | Activate/deactivate key |
+| `/admin/keys/{key_id}` | `DELETE` | Revoke key (by integer id) |
+| `/admin/keys/{key_id}/toggle` | `PATCH` | Activate/deactivate key (by integer id) |
+| `/admin/aliases` | `GET` / `POST` | List or create model aliases |
+| `/admin/aliases/{alias_name}` | `DELETE` | Delete alias |
 | `/admin/usage` | `GET` | View token usage logs |
+| `/health` | `GET` | Health check (no auth required) |
 
-All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
+**Note:** Key operations (`DELETE`, `PATCH /toggle`) use integer `key_id` from the database, not the API key string itself.
 
 ## Usage Logs
 
@@ -132,16 +146,6 @@ Proxy overhead measured with Locust against real llama-server backends using **p
 | RPS | 8.1 | 7.9 | -0.2 |
 
 At low load the proxy adds **~5ms mean** overhead — less than 1% of total request time. The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory. Token logging is fully async via background worker — no blocking on hot path. At higher load the ~270ms mean overhead at 100 concurrent users is just **~2.7%** of total request time (~10s), negligible compared to backend queueing delay.
-
-### High load (100 users each, 60s)
-
-| Metric | Direct | Through proxy | Overhead |
-|--------|--------|---------------|----------|
-| P50 latency | ~12-13s | ~12-13s | ~0ms |
-| Mean latency | ~10.1s | ~10.4s | +270ms |
-| RPS | 8.1 | 7.9 | -0.2 |
-
-At low load the proxy adds **~10-24ms mean** overhead — less than 4% of total request time.
 
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
 
