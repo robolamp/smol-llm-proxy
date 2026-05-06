@@ -131,35 +131,26 @@ curl "http://localhost:8000/admin/usage?key_id=1" \
 
 ## Benchmarking
 
-Proxy overhead measured with Locust against real llama-server backends using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison.
+Proxy overhead measured with Locust using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison.
 
-### Low load (5 users each, 30s)
+**Hardware:** i9-14900K, RTX 4090 | **Model:** Qwen3.5-2B-GGUF | **Backend:** llama.cpp server
 
-| Metric | Direct | Through proxy | Overhead |
-|--------|--------|---------------|----------|
-| P50 latency | 560ms | 570ms | +10ms |
-| Mean latency | 596ms | 601ms | +5ms |
-| RPS | 8.3 | 8.3 | ~0 |
+### Mock backend (fixed 100ms delay, clean conditions)
 
-### Medium load (20 users each, 60s)
+| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
+|------|-------|-----------|-----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
+| Low | 5+5 | 100ms | 100ms | +0ms | 101ms | 106ms | +5ms | 49.2 | 47.0 | -2.3 |
+| Medium | 20+20 | 100ms | 110ms | +10ms | 101ms | 113ms | +12ms | 195.0 | 174.5 | -20.5 |
 
-| Metric | Direct | Through proxy | Overhead |
-|--------|--------|---------------|----------|
-| P50 latency | ~2300ms | ~2300ms | ~0ms |
-| Mean latency | ~2.3s | ~2.4s | +30ms |
-| RPS | 8.4 | 8.4 | ~0 |
+### Real llama-server backend
 
-### High load (100 users each, 60s)
+| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
+|------|-------|-----------|-----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
+| Low | 5+5 | 560ms | 550ms | ~0ms | 567ms | 595ms | +27ms | 8.8 | 8.3 | -0.4 |
+| Medium | 20+20 | ~2300ms | ~2300ms | ~0ms | ~2306ms | ~2344ms | +38ms | 8.4 | 8.3 | -0.1 |
 
-| Metric | Direct | Through proxy | Overhead |
-|--------|--------|---------------|----------|
-| P50 latency | ~12-13s | ~12-13s | ~0ms |
-| Mean latency | ~10.1s | ~10.4s | +270ms |
-| RPS | 8.1 | 7.9 | -0.2 |
-
-At low load the proxy adds **~5ms mean** overhead — less than 1% of total request time. The proxy uses in-memory caching for keys, aliases, and routing; SQLite is touched only once per cold start, then all lookups are in-memory. Token logging is fully async via background worker — no blocking on hot path. At higher load the ~270ms mean overhead at 100 concurrent users is just **~2.7%** of total request time (~10s), negligible compared to backend queueing delay.
-
-Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]`
+At low load the proxy adds **~5ms overhead** on clean conditions (mock) and **~27ms** against real backend — negligible compared to backend latency (~560ms+).
+Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ## Architecture
 

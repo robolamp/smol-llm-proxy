@@ -18,11 +18,14 @@ PROXY_PORT = int(os.environ.get("PROXY_PORT", 7077))
 DB_PATH = os.environ.get("DB_PATH", "/tmp/bench_proxy.db")
 CONFIG_PATH = str(SCRIPT_DIR / "config.yaml")
 
+MOCK_MODE = "--mock" in sys.argv
+
 MODE = sys.argv[1] if len(sys.argv) > 1 else "low"
 MODES = {"low": (5, 30), "medium": (20, 60), "high": (100, 60)}
 USERS, DURATION = MODES.get(MODE, (5, 30))
 
 LOCUSTFILE = str(SCRIPT_DIR / "locustfile.py")
+MOCK_PORT = int(os.environ.get("MOCK_PORT", "8765"))
 
 
 def read_env(key: str) -> str:
@@ -79,6 +82,123 @@ def start_proxy(admin_key: str):
         stderr=subprocess.STDOUT,
     )
     return proc
+
+
+def start_mock_server():
+    env = os.environ.copy()
+    env["MOCK_PORT"] = str(MOCK_PORT)
+    log_path = "/tmp/mock_bench.log"
+    proc = subprocess.Popen(
+        [str(VENV_PYTHON), str(SCRIPT_DIR / "mock_server.py")],
+        env=env,
+        cwd=str(SCRIPT_DIR),
+        stdout=open(log_path, "w"),
+        stderr=subprocess.STDOUT,
+    )
+    return proc
+
+
+def wait_for_mock(timeout=15):
+    for i in range(timeout):
+        try:
+            r = subprocess.run(
+                ["curl", "-s", f"http://localhost:{MOCK_PORT}/v1/models"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if r.returncode == 0 and "mock" in r.stdout:
+                return True
+        except Exception:
+            pass
+        time.sleep(1)
+    return False
+
+
+def setup_mock_backend(admin_key: str):
+    """Configure proxy to route 'mock' model to mock server via admin API."""
+    import urllib.request
+
+    mock_url = f"http://localhost:{MOCK_PORT}"
+    auth_header = {"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"}
+
+    # Create server pointing to mock
+    req = urllib.request.Request(
+        f"http://localhost:{PROXY_PORT}/admin/servers",
+        data=json.dumps({"name": "mock-server", "url": mock_url}),
+        headers=auth_header,
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        server_id = json.loads(resp.read())["id"]
+
+    # Assign 'mock' model to this server
+    req = urllib.request.Request(
+        f"http://localhost:{PROXY_PORT}/admin/servers/{server_id}/models",
+        data=json.dumps({"model_name": "mock"}),
+        headers=auth_header,
+        method="POST",
+    )
+    with urllib.request.urlopen(req) as resp:
+        resp.read()
+
+    print(f"Mock backend configured: mock -> {mock_url}")
+
+
+def run_both_direct_mock(user_key: str):
+    """Run both benchmarks against mock server simultaneously."""
+    import threading
+
+    def run_and_capture(cmd, env, label):
+        r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+        print(f"[{label}] exit={r.returncode}")
+        if r.stdout:
+            for line in r.stdout.splitlines()[-20:]:
+                print(f"  {line}")
+
+    mock_url = f"http://localhost:{MOCK_PORT}"
+    cmd1 = [
+        str(VENV_PYTHON),
+        "-m",
+        "locust",
+        "-f",
+        str(SCRIPT_DIR / "locust_direct.py"),
+        "--headless",
+        "-u",
+        str(USERS),
+        "-r",
+        "10",
+        "-t",
+        f"{DURATION}s",
+        "--csv",
+        "/tmp/bench_direct",
+    ]
+    env1 = {**os.environ, "BENCH_MODEL": "mock", "DIRECT_URL": mock_url}
+
+    cmd2 = [
+        str(VENV_PYTHON),
+        "-m",
+        "locust",
+        "-f",
+        str(SCRIPT_DIR / "locust_proxy.py"),
+        "--headless",
+        "-u",
+        str(USERS),
+        "-r",
+        "10",
+        "-t",
+        f"{DURATION}s",
+        "--csv",
+        "/tmp/bench_proxy",
+    ]
+    env2 = {**os.environ, "BENCH_MODEL": "mock", "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": user_key}
+
+    t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
+    t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
 
 
 def create_user_key(admin_key: str) -> str:
@@ -233,57 +353,111 @@ def parse_result(target: str):
 
 def main():
     admin_key = read_env("ADMIN_KEY")
-    direct_url, upstream_key, bench_model = load_config()
 
-    print(f"Mode: {MODE} ({USERS} users, {DURATION}s)")
-    print(f"Direct URL: {direct_url}")
-    print(f"Proxy port: {PROXY_PORT}")
-    print(f"Config: {CONFIG_PATH}")
-    print(f"DB: {DB_PATH}")
+    if MOCK_MODE:
+        print(f"Mode: {MODE} ({USERS} users, {DURATION}s)")
+        print(f"Mock port: {MOCK_PORT}")
+        print(f"Proxy port: {PROXY_PORT}")
+        print(f"DB: {DB_PATH}")
 
-    # Clean up old db and kill old proxy
-    if os.path.exists(DB_PATH):
-        os.remove(DB_PATH)
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
 
-    for pid_line in subprocess.run(["ps", "aux"], capture_output=True, text=True).stdout.splitlines():
-        if f"--port {PROXY_PORT}" in pid_line and "grep" not in pid_line:
-            pid = int(pid_line.split()[1])
+        for pid_line in subprocess.run(["ps", "aux"], capture_output=True, text=True).stdout.splitlines():
+            if f"--port {PROXY_PORT}" in pid_line and "grep" not in pid_line:
+                pid = int(pid_line.split()[1])
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+        time.sleep(1)
+
+        print("\nStarting mock server...")
+        mock_proc = start_mock_server()
+        if not wait_for_mock():
+            print("Mock server failed to start")
+            mock_proc.terminate()
+            sys.exit(1)
+        print("Mock server started OK")
+
+        print("\nStarting proxy...")
+        proc = start_proxy(admin_key)
+        if not wait_for_proxy():
+            log_text = ""
             try:
-                os.kill(pid, signal.SIGKILL)
+                with open("/tmp/proxy_bench.log") as f:
+                    log_text = f.read()[-2000:]
             except Exception:
                 pass
-    time.sleep(1)
+            print(f"Proxy failed to start. Last log:\n{log_text}")
+            proc.terminate()
+            sys.exit(1)
+        print("Proxy started OK")
 
-    # Start proxy
-    print("\nStarting proxy...")
-    proc = start_proxy(admin_key)
-    if not wait_for_proxy():
-        log_text = ""
+        print("\nCreating benchmark user key...")
+        user_key = create_user_key(admin_key)
+        print(f"User key: {user_key[:20]}...")
+
+        print("\nConfiguring proxy to route 'mock' model to mock server...")
+        setup_mock_backend(admin_key)
+
         try:
-            with open("/tmp/proxy_bench.log") as f:
-                log_text = f.read()[-2000:]
-        except Exception:
-            pass
-        print(f"Proxy failed to start. Last log:\n{log_text}")
-        proc.terminate()
-        sys.exit(1)
-    print("Proxy started OK")
+            print(f"\n{'=' * 50}")
+            print(f"Running BOTH benchmarks against mock server ({USERS} users each, {DURATION}s)")
+            print(f"{'=' * 50}")
+            run_both_direct_mock(user_key)
+        finally:
+            proc.terminate()
+            proc.wait()
+            mock_proc.terminate()
+            mock_proc.wait()
+    else:
+        direct_url, upstream_key, bench_model = load_config()
 
-    # Create user key
-    print("\nCreating benchmark user key...")
-    user_key = create_user_key(admin_key)
-    print(f"User key: {user_key[:20]}...")
+        print(f"Mode: {MODE} ({USERS} users, {DURATION}s)")
+        print(f"Direct URL: {direct_url}")
+        print(f"Proxy port: {PROXY_PORT}")
+        print(f"Config: {CONFIG_PATH}")
+        print(f"DB: {DB_PATH}")
 
-    try:
-        # Run both benchmarks SIMULTANEOUSLY for fair comparison
-        print(f"\n{'=' * 50}")
-        print(f"Running BOTH benchmarks simultaneously ({USERS} users each, {DURATION}s)")
-        print(f"{'=' * 50}")
-        run_both_parallel(user_key, direct_url, upstream_key, bench_model)
+        if os.path.exists(DB_PATH):
+            os.remove(DB_PATH)
 
-    finally:
-        proc.terminate()
-        proc.wait()
+        for pid_line in subprocess.run(["ps", "aux"], capture_output=True, text=True).stdout.splitlines():
+            if f"--port {PROXY_PORT}" in pid_line and "grep" not in pid_line:
+                pid = int(pid_line.split()[1])
+                try:
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
+        time.sleep(1)
+
+        print("\nStarting proxy...")
+        proc = start_proxy(admin_key)
+        if not wait_for_proxy():
+            log_text = ""
+            try:
+                with open("/tmp/proxy_bench.log") as f:
+                    log_text = f.read()[-2000:]
+            except Exception:
+                pass
+            print(f"Proxy failed to start. Last log:\n{log_text}")
+            proc.terminate()
+            sys.exit(1)
+        print("Proxy started OK")
+
+        print("\nCreating benchmark user key...")
+        user_key = create_user_key(admin_key)
+        print(f"User key: {user_key[:20]}...")
+
+        try:
+            print(f"\n{'=' * 50}")
+            print(f"Running BOTH benchmarks simultaneously ({USERS} users each, {DURATION}s)")
+            print(f"{'=' * 50}")
+            run_both_parallel(user_key, direct_url, upstream_key, bench_model)
+        finally:
+            proc.terminate()
+            proc.wait()
 
     # Parse and compare results
     direct_stats = parse_result("direct")
