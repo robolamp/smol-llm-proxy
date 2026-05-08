@@ -75,7 +75,7 @@ def start_proxy(admin_key: str):
 
     log_path = "/tmp/proxy_bench.log"
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", str(PROXY_PORT)],
+        [str(VENV_PYTHON), "-m", "uvicorn", "smol_llm_proxy.main:app", "--host", "0.0.0.0", "--port", str(PROXY_PORT)],
         env=env,
         cwd=str(PROJECT_DIR),
         stdout=open(log_path, "w"),

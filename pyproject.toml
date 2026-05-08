@@ -21,10 +21,13 @@ dev = ["pytest>=8.0", "ruff>=0.6.0"]
 bench = ["locust>=2.31.0"]
 
 [project.scripts]
-smol-llm-proxy = "__main__:main"
+smol-llm-proxy = "smol_llm_proxy.__main__:main"
 
 [tool.setuptools.packages.find]
 include = ["smol_llm_proxy*"]
+
+[tool.setuptools.package-data]
+smol_llm_proxy = [".env.example", "config.example.yaml", "entrypoint.sh"]
 
 [tool.ruff]
 line-length = 120

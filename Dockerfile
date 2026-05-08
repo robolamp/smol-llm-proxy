@@ -21,4 +21,4 @@ ENV PROXY_HOST=0.0.0.0
 ENV PROXY_PORT=8000
 
 ENTRYPOINT ["./entrypoint.sh"]
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "smol_llm_proxy.main:app", "--host", "0.0.0.0", "--port", "8000"]

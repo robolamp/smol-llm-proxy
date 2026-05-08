@@ -16,6 +16,8 @@ An API proxy for llama.cpp. Multi-server routing, per-user keys, token accountin
 
 ### Docker Compose (recommended)
 
+Clone the repo, then:
+
 ```bash
 cp .env.example .env                # set ADMIN_KEY
 cp config.example.yaml config.yaml  # fill in your servers
@@ -38,9 +40,23 @@ docker run -p 8000:8000 \
 ### Pip install
 
 ```bash
-pip install .
+pip install smol-llm-proxy
+```
+
+Example configs ship with the package. Copy them:
+
+```bash
+python -c "import smol_llm_proxy, shutil, os; d=os.path.dirname(smol_llm_proxy.__file__); shutil.copy2(f'{d}/config.example.yaml','config.yaml'); shutil.copy2(f'{d}/.env.example','.env')"
+cp .env.example .env                # set ADMIN_KEY
 cp config.example.yaml config.yaml  # fill in your servers
 ADMIN_KEY=secret python -m smol_llm_proxy
+```
+
+Or download from GitHub:
+
+```bash
+curl -sO https://raw.githubusercontent.com/robolab/smol-llm-proxy/main/.env.example && cp .env.example .env
+curl -sO https://raw.githubusercontent.com/robolab/smol-llm-proxy/main/config.example.yaml && cp config.example.yaml config.yaml
 ```
 
 ## Configuration

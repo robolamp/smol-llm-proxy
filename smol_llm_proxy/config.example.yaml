@@ -1,0 +1,13 @@
+# smol-llm-proxy configuration
+# Copy this file and fill in your llama-server URLs, models, and aliases
+
+servers:
+  - name: my-server
+    url: http://host:port
+    api_key: ""       # optional, if llama-server requires auth
+    models:
+      - model-name.gguf
+
+# Aliases: short names → real model names
+aliases:
+  alias: model-name.gguf

@@ -40,7 +40,7 @@ def _start_proxy(port, db_path, config_path):
     project_dir = Path(__file__).resolve().parent.parent
 
     proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "main:app", "--host", "127.0.0.1", "--port", str(port)],
+        [sys.executable, "-m", "uvicorn", "smol_llm_proxy.main:app", "--host", "127.0.0.1", "--port", str(port)],
         env=env,
         cwd=str(project_dir),
         stdout=subprocess.PIPE,

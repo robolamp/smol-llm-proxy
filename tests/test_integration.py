@@ -98,7 +98,7 @@ def proxy_http_url():
     """
     import uvicorn
     from smol_llm_proxy.config import PROXY_HOST, PROXY_PORT
-    from main import app
+    from smol_llm_proxy.main import app
 
     config = uvicorn.Config(app=app, host=PROXY_HOST, port=PROXY_PORT, log_level="error")
     server = uvicorn.Server(config)

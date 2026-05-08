@@ -1,15 +1,11 @@
 """Fixtures for smol-llm-proxy tests."""
 
 import os
-import sys
 import tempfile
 import uuid
 import pytest
 
 from fastapi.testclient import TestClient
-
-# Ensure the project root is on sys.path so `main` can be imported
-sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 os.environ["ADMIN_KEY"] = "test-admin-key"
 os.environ["PROXY_PORT"] = "8099"
@@ -85,7 +81,7 @@ def _reset_http_client():
 
 @pytest.fixture(scope="session")
 def client(db_path):
-    from main import app
+    from smol_llm_proxy.main import app
 
     return TestClient(app)
 
