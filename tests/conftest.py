@@ -78,6 +78,10 @@ def _reset_http_client():
     finally:
         smol_llm_proxy.proxy._httpx_client = None
 
+    from smol_llm_proxy.metrics import _reset_async_logger
+
+    _reset_async_logger()
+
 
 @pytest.fixture(scope="session")
 def client(db_path):

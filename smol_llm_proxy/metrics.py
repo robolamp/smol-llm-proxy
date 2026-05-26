@@ -93,7 +93,6 @@ async def _shutdown_async_logger():
     global _logger_task
     if _usage_queue is None:
         return
-    # Drain queue and write remaining items
     batch = []
     try:
         while True:
@@ -103,7 +102,6 @@ async def _shutdown_async_logger():
         pass
     if batch:
         _flush_batch(batch)
-    # Cancel the worker task
     if _logger_task and not _logger_task.done():
         _logger_task.cancel()
         try:

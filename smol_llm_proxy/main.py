@@ -27,10 +27,9 @@ async def lifespan(app):
     sync_config()
     yield
     from smol_llm_proxy.proxy import shutdown_httpx_client
-
-    await shutdown_httpx_client()
     from smol_llm_proxy.metrics import _shutdown_async_logger
 
+    await shutdown_httpx_client()
     await _shutdown_async_logger()
 
 

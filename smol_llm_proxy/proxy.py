@@ -7,8 +7,8 @@ from fastapi import Request, HTTPException
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 
 from .config import HTTPX_TIMEOUT
-from .database import get_db, validate_key, resolve_routing
-from .auth import _hash_key
+from .database import get_db, resolve_routing
+from .auth import _find_key_info
 from .cache import get_cached_alias, set_cached_alias
 from .metrics import enqueue_usage
 
@@ -20,7 +20,7 @@ def get_httpx_client() -> httpx.AsyncClient:
     if _httpx_client is None or _httpx_client.is_closed:
         _httpx_client = httpx.AsyncClient(
             timeout=HTTPX_TIMEOUT,
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20, keepalive_expiry=30.0),
+            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30.0),
         )
     return _httpx_client
 
@@ -93,11 +93,14 @@ async def _build_proxy_context(request: Request, path: str):
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
     model_name = body_json.get("model", "")
-    key_info = validate_key(_hash_key(user_key))
-    if not key_info:
+    key_info = _find_key_info(user_key)
+    if not key_info or not key_info.get("active"):
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
     routing = resolve_routing(key_info["id"], model_name)
     display_name, real_model_name = await _resolve_model(model_name)
+    if display_name != real_model_name:
+        body_json["model"] = real_model_name
+        body_bytes = orjson.dumps(body_json)
     if not routing:
         raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
     return key_info, routing, display_name, real_model_name, body_json, body_bytes
@@ -105,7 +108,7 @@ async def _build_proxy_context(request: Request, path: str):
 
 def _build_upstream(server: dict, request: Request, path: str) -> tuple[str, dict]:
     target_url = _format_server_url(server["url"], path)
-    upstream_headers = {k: v for k, v in request.headers.items() if k.lower() != "host"}
+    upstream_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "authorization")}
     if server.get("api_key"):
         upstream_headers["authorization"] = f"Bearer {server['api_key']}"
     return target_url, upstream_headers
@@ -161,10 +164,10 @@ def _parse_sse_usage(chunk: str) -> tuple[int, int, float, float]:
 
 
 async def _stream_chunks(target_url: str, headers: dict, body: bytes):
-    async with httpx.AsyncClient(timeout=HTTPX_TIMEOUT) as client:
-        async with client.stream("POST", target_url, headers=headers, content=body) as resp:
-            async for chunk in resp.aiter_bytes():
-                yield chunk.decode("utf-8")
+    client = get_httpx_client()
+    async with client.stream("POST", target_url, headers=headers, content=body) as resp:
+        async for chunk in resp.aiter_bytes():
+            yield chunk.decode("utf-8")
 
 
 async def proxy_streaming(request: Request, path: str):

@@ -1,22 +1,30 @@
 """SQLite database schema and operations."""
 
 import sqlite3
+import threading
 from pathlib import Path
 from contextlib import contextmanager
 
 from .config import get_db_path
+from .cache import get_cached_route, set_cached_route
 
 
 def _row_to_dict(row):
     return dict(row) if row else None
 
 
+_thread_local = threading.local()
+
+
 def _get_connection(db_path: Path) -> sqlite3.Connection:
-    conn = sqlite3.connect(str(db_path))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        _thread_local.conn = conn
+    return _thread_local.conn
 
 
 @contextmanager
@@ -28,8 +36,16 @@ def get_db():
     except Exception:
         conn.rollback()
         raise
-    finally:
-        conn.close()
+
+
+def reset_db_connection():
+    """Close and reset the thread-local DB connection. For testing."""
+    if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
+        try:
+            _thread_local.conn.close()
+        except Exception:
+            pass
+        _thread_local.conn = None
 
 
 def validate_key(key_hash: str):
@@ -44,6 +60,11 @@ def validate_key(key_hash: str):
 
 def resolve_routing(key_id: int, model_name: str):
     """Resolve alias + find server for a given key. Returns server info or None."""
+    cache_key = f"{key_id}:{model_name}"
+    cached = get_cached_route(cache_key)
+    if cached:
+        return cached
+
     with get_db() as conn:
         row = conn.execute(
             """SELECT s.id as server_id, s.url, s.api_key,
@@ -56,7 +77,10 @@ def resolve_routing(key_id: int, model_name: str):
               LIMIT 1""",
             (model_name, model_name, model_name, key_id),
         ).fetchone()
-    return _row_to_dict(row)
+    result = _row_to_dict(row)
+    if result:
+        set_cached_route(cache_key, result)
+    return result
 
 
 def init_db():

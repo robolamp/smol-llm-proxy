@@ -153,20 +153,31 @@ Proxy overhead measured with Locust using **parallel concurrent execution** — 
 
 ### Mock backend (fixed 100ms delay, clean conditions)
 
-| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
-|------|-------|-----------|-----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 100ms | 100ms | +0ms | 101ms | 106ms | +5ms | 49.2 | 47.0 | -2.3 |
-| Medium | 20+20 | 100ms | 110ms | +10ms | 101ms | 113ms | +12ms | 195.0 | 174.5 | -20.5 |
+| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
+|------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
+| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | 0ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 49.2 | 48.4 | -0.8 |
+| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 194.8 | 191.3 | -3.6 |
+| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 130ms | +20ms | 102ms | 108ms | +5ms | 896.0 | 853.5 | -42.5 |
 
 ### Real llama-server backend
 
-| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
-|------|-------|-----------|-----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 560ms | 550ms | ~0ms | 567ms | 595ms | +27ms | 8.8 | 8.3 | -0.4 |
-| Medium | 20+20 | ~2300ms | ~2300ms | ~0ms | ~2306ms | ~2344ms | +38ms | 8.4 | 8.3 | -0.1 |
+| Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
+|------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
+| Low | 5+5 | 570ms | 570ms | +0ms | 940ms | 930ms | -10ms | ~1200ms | ~1100ms | ~0ms | 605ms | 604ms | -1ms | 8.2 | 8.2 | 0.0 |
+| Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~14000ms | ~14000ms | ~0ms | ~2413ms | ~2460ms | +47ms | 8.0 | 7.9 | -0.1 |
 
-At low load the proxy adds **~5ms overhead** on clean conditions (mock) and **~27ms** against real backend — negligible compared to backend latency (~560ms+).
+Proxy overhead on clean conditions (mock): **~2-5ms** P50, **+20ms** P99 across all load levels with 4 uvicorn workers. Against real backend: **negligible** — P50/P95/P99 within measurement noise (~1s variance at tail).
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
+
+### Memory footprint
+
+| Workers | Idle    | Under load | Growth |
+|---------|---------|------------|--------|
+| 1       | 53 MB   | 62 MB      | +9 MB  |
+| 4       | 252 MB  | 273 MB     | +21 MB |
+
+Per-worker baseline: **~53 MB**, load growth: **+4–6 MB** per worker.  
+Identical footprint against mock and real backends — the proxy forwards without buffering responses. No memory growth observed across extended runs.
 
 ## Architecture
 

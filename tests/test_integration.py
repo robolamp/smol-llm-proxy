@@ -89,7 +89,7 @@ def setup_integration_servers(client, available_servers):
                     )
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="function")
 def proxy_http_url():
     """Start the proxy server in a background thread for streaming tests.
 
@@ -114,6 +114,9 @@ def proxy_http_url():
 
     server.should_exit = True
     t.join(timeout=5)
+
+    import smol_llm_proxy.proxy
+    smol_llm_proxy.proxy._httpx_client = None
 
 
 class TestNonStreaming:
@@ -292,22 +295,25 @@ class TestUsageLogging:
         assert last["completion_tokens"] > 0
         assert last["prompt_ms"] > 0 or last["predicted_ms"] > 0
 
-    def test_both_types_in_logs(self, client, integration_key, available_servers, proxy_http_url):
+    def test_both_types_in_logs(self, integration_key, available_servers, proxy_http_url):
         """After both stream and non-stream, we have two separate log entries."""
         if 8080 not in available_servers:
             pytest.skip("No llama-server on port 8080")
 
         model = available_servers[8080]["models"][0]
 
-        client.post(
-            "/v1/chat/completions",
-            headers={"Authorization": f"Bearer {integration_key}"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": "hi"}],
-            },
-        )
         with httpx.Client(base_url=proxy_http_url, timeout=30) as c:
+            c.post(
+                "/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {integration_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+            )
             c.post(
                 "/v1/chat/completions",
                 headers={

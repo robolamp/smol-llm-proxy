@@ -75,7 +75,7 @@ def start_proxy(admin_key: str):
 
     log_path = "/tmp/proxy_bench.log"
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "smol_llm_proxy.main:app", "--host", "0.0.0.0", "--port", str(PROXY_PORT)],
+        [str(VENV_PYTHON), "-m", "uvicorn", "smol_llm_proxy.main:app", "--host", "0.0.0.0", "--port", str(PROXY_PORT), "--workers", "4"],
         env=env,
         cwd=str(PROJECT_DIR),
         stdout=open(log_path, "w"),
@@ -346,6 +346,7 @@ def parse_result(target: str):
                 stats["rps"] = float(parts[9]) if parts[9] else 0.0
                 stats["t50"] = float(parts[11]) if parts[11] and parts[11] != "N/A" else 0.0
                 stats["t95"] = float(parts[16]) if parts[16] and parts[16] != "N/A" else 0.0
+                stats["t99"] = float(parts[18]) if parts[18] and parts[18] != "N/A" else 0.0
             except (ValueError, IndexError):
                 continue
     return stats
@@ -479,6 +480,7 @@ def main():
 
     overhead_p50 = proxy_stats["t50"] - direct_stats["t50"]
     overhead_p95 = proxy_stats["t95"] - direct_stats["t95"]
+    overhead_p99 = proxy_stats["t99"] - direct_stats["t99"]
     overhead_mean = proxy_stats["avg"] - direct_stats["avg"]
     overhead_rps = proxy_stats["rps"] - direct_stats["rps"]
 
@@ -486,6 +488,7 @@ def main():
     print(f"{'-' * 15} {'-' * 12} {'-' * 14} {'-' * 10}")
     print(f"{'P50 latency':<15} {ms(direct_stats['t50']):>12} {ms(proxy_stats['t50']):>14} {overhead_p50:>+9.0f}ms")
     print(f"{'P95 latency':<15} {ms(direct_stats['t95']):>12} {ms(proxy_stats['t95']):>14} {overhead_p95:>+9.0f}ms")
+    print(f"{'P99 latency':<15} {ms(direct_stats['t99']):>12} {ms(proxy_stats['t99']):>14} {overhead_p99:>+9.0f}ms")
     print(f"{'Mean latency':<15} {ms(direct_stats['avg']):>12} {ms(proxy_stats['avg']):>14} {overhead_mean:>+9.0f}ms")
     print(f"{'RPS':<15} {rps(direct_stats['rps']):>12} {rps(proxy_stats['rps']):>14} {overhead_rps:>+9.1f}")
 
