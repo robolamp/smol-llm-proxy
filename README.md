@@ -1,5 +1,12 @@
 # smol-llm-proxy
 
+[![PyPI version](https://img.shields.io/pypi/v/smol-llm-proxy)](https://pypi.org/project/smol-llm-proxy/)
+[![CI](https://github.com/robolamp/smol-llm-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/robolamp/smol-llm-proxy/actions)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+
+Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across multiple users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
+
 An API proxy for llama.cpp. Multi-server routing, per-user keys, token accounting in less than 1000 lines of code. Minimal dependencies, ~5ms overhead.
 
 ## Features
@@ -55,8 +62,31 @@ ADMIN_KEY=secret python -m smol_llm_proxy
 Or download from GitHub:
 
 ```bash
-curl -sO https://raw.githubusercontent.com/robolab/smol-llm-proxy/main/.env.example && cp .env.example .env
-curl -sO https://raw.githubusercontent.com/robolab/smol-llm-proxy/main/config.example.yaml && cp config.example.yaml config.yaml
+curl -sO https://raw.githubusercontent.com/robolamp/smol-llm-proxy/main/.env.example && cp .env.example .env
+curl -sO https://raw.githubusercontent.com/robolamp/smol-llm-proxy/main/config.example.yaml && cp config.example.yaml config.yaml
+```
+
+### Quick usage
+
+1. Create a user key:
+
+```bash
+curl -X POST http://localhost:8000/admin/keys \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -d '{"name": "my-user", "active": true}'
+```
+
+2. Send a chat completion with the user key:
+
+```bash
+curl http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer sk-..." \
+  -d '{
+    "model": "Qwen3.5-2B",
+    "messages": [{"role": "user", "content": "Hello!"}],
+    "stream": true
+  }'
 ```
 
 ## Configuration
@@ -178,6 +208,20 @@ Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add 
 
 Per-worker baseline: **~53 MB**, load growth: **+4–6 MB** per worker.  
 Identical footprint against mock and real backends — the proxy forwards without buffering responses. No memory growth observed across extended runs.
+
+### Caveat
+
+Real backend P99 spikes (Medium mode, ~14s) are caused by llama.cpp single-thread inference bottleneck under 20 concurrent users — not proxy overhead. Proxy adds negligible latency regardless of backend saturation.
+
+## How it compares
+
+smol-llm-proxy is built for one specific case: **multiple llama-server instances, multiple users, per-user token accounting**. 
+
+- **[LiteLLM](https://github.com/BerriAI/litellm)** — much broader scope: 100+ cloud providers, virtual keys, budgets, admin UI, fallbacks. Requires Postgres + Redis for full features. Use it if you need a production gateway across cloud LLMs.
+- **[llama-swap](https://github.com/mostlygeek/llama-swap)** — solves a different problem: hot-swapping models on one llama.cpp instance. No users, no accounting. Use it if you run many models on one machine and want them loaded on demand.
+- **[llama.cpp router mode](https://github.com/ggerganov/llama.cpp)** — built into llama-server itself. Same scope as llama-swap, no auth layer.
+
+If you self-host several llama-server instances on one or more machines and want to share them with a small group while tracking usage, smol-llm-proxy is the smallest thing that does that. Otherwise, one of the above is probably a better fit.
 
 ## Architecture
 
