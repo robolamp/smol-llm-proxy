@@ -116,6 +116,7 @@ def proxy_http_url():
     t.join(timeout=5)
 
     import smol_llm_proxy.proxy
+
     smol_llm_proxy.proxy._httpx_client = None
 
 

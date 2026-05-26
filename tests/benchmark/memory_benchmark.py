@@ -39,8 +39,7 @@ def wait_for_proxy(timeout=30):
     for i in range(timeout):
         try:
             r = subprocess.run(
-                ["curl", "-s", f"http://localhost:{PROXY_PORT}/health"],
-                capture_output=True, text=True, timeout=2
+                ["curl", "-s", f"http://localhost:{PROXY_PORT}/health"], capture_output=True, text=True, timeout=2
             )
             if r.returncode == 0 and "ok" in r.stdout:
                 return True
@@ -52,14 +51,13 @@ def wait_for_proxy(timeout=30):
 
 def get_worker_pids(port):
     """Find uvicorn worker PIDs by matching processes listening on the port."""
-    out = subprocess.run(
-        ["ss", "-tlnp"], capture_output=True, text=True
-    ).stdout
+    out = subprocess.run(["ss", "-tlnp"], capture_output=True, text=True).stdout
     pids = set()
     for line in out.splitlines():
         if f":{port}" in line:
             # Extract PIDs from users:(("python",pid=XXX,...))
             import re
+
             for m in re.finditer(r"pid=(\d+)", line):
                 pids.add(int(m.group(1)))
     return sorted(pids)
@@ -80,11 +78,9 @@ def get_rss(pid):
 def get_all_proxy_pids(port, master_pid=None):
     """Get master + worker PIDs. Workers are children of the master."""
     pids = set()
-    
+
     # Find master process
-    out = subprocess.run(
-        ["ps", "aux"], capture_output=True, text=True
-    ).stdout
+    out = subprocess.run(["ps", "aux"], capture_output=True, text=True).stdout
     master_found = None
     for line in out.splitlines():
         if f"--port {port}" in line and "grep" not in line:
@@ -96,12 +92,11 @@ def get_all_proxy_pids(port, master_pid=None):
                     master_found = pid
                 except ValueError:
                     pass
-    
+
     # If we have a master PID, find its children (uvicorn workers)
     if master_found:
         child_out = subprocess.run(
-            ["ps", "--ppid", str(master_found), "-o", "pid="],
-            capture_output=True, text=True
+            ["ps", "--ppid", str(master_found), "-o", "pid="], capture_output=True, text=True
         ).stdout
         for line in child_out.splitlines():
             line = line.strip()
@@ -110,18 +105,21 @@ def get_all_proxy_pids(port, master_pid=None):
                     pids.add(int(line))
                 except ValueError:
                     pass
-    
+
     return sorted(pids)
 
 
 def send_request(url, key, model="mock", timeout=30):
     """Send a single chat completion request via urllib."""
     import urllib.request
-    data = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": False,
-    })
+
+    data = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": False,
+        }
+    )
     req = urllib.request.Request(
         url,
         data=data,
@@ -142,11 +140,14 @@ def send_request(url, key, model="mock", timeout=30):
 def send_streaming_request(url, key, model="mock"):
     """Send a streaming chat completion request."""
     import urllib.request
-    data = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": "hello"}],
-        "stream": True,
-    })
+
+    data = json.dumps(
+        {
+            "model": model,
+            "messages": [{"role": "user", "content": "hello"}],
+            "stream": True,
+        }
+    )
     req = urllib.request.Request(
         url,
         data=data,
@@ -170,6 +171,7 @@ def send_streaming_request(url, key, model="mock"):
 def setup_mock_backend(admin_key):
     """Configure proxy to route 'mock' model to mock server."""
     import urllib.request
+
     mock_url = f"http://localhost:{MOCK_PORT}"
     auth_header = {"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"}
 
@@ -195,6 +197,7 @@ def setup_mock_backend(admin_key):
 def setup_real_backend(admin_key, backend_url, api_key, model_name):
     """Configure proxy to route a model to the real backend."""
     import urllib.request
+
     auth_header = {"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"}
 
     req = urllib.request.Request(
@@ -220,6 +223,7 @@ def setup_real_backend(admin_key, backend_url, api_key, model_name):
 
 def create_user_key(admin_key):
     import urllib.request
+
     url = f"http://localhost:{PROXY_PORT}/admin/keys"
     req = urllib.request.Request(
         url,
@@ -241,9 +245,18 @@ def start_proxy(admin_key, workers):
 
     log_path = "/tmp/proxy_memory_bench.log"
     proc = subprocess.Popen(
-        [str(VENV_PYTHON), "-m", "uvicorn", "smol_llm_proxy.main:app",
-         "--host", "0.0.0.0", "--port", str(PROXY_PORT),
-         "--workers", str(workers)],
+        [
+            str(VENV_PYTHON),
+            "-m",
+            "uvicorn",
+            "smol_llm_proxy.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            str(PROXY_PORT),
+            "--workers",
+            str(workers),
+        ],
         env=env,
         cwd=str(PROJECT_DIR),
         stdout=open(log_path, "w"),
@@ -271,7 +284,9 @@ def wait_for_mock(timeout=15):
         try:
             r = subprocess.run(
                 ["curl", "-s", f"http://localhost:{MOCK_PORT}/v1/models"],
-                capture_output=True, text=True, timeout=2,
+                capture_output=True,
+                text=True,
+                timeout=2,
             )
             if r.returncode == 0 and "mock" in r.stdout:
                 return True
@@ -287,8 +302,9 @@ def kb(val):
 
 def main():
     parser = argparse.ArgumentParser(description="Proxy memory benchmark")
-    parser.add_argument("workers", type=int, choices=[1, 4], default=4, nargs="?",
-                        help="Number of uvicorn workers (1 or 4)")
+    parser.add_argument(
+        "workers", type=int, choices=[1, 4], default=4, nargs="?", help="Number of uvicorn workers (1 or 4)"
+    )
     parser.add_argument("--mock", action="store_true", help="Use mock server instead of real backend")
     args = parser.parse_args()
 
@@ -356,6 +372,7 @@ def main():
         setup_mock_backend(admin_key)
     else:
         import yaml
+
         with open(CONFIG_PATH) as f:
             cfg = yaml.safe_load(f)
         srv = cfg["servers"][0]
@@ -384,7 +401,7 @@ def main():
     # Print initial state
     print(f"\nFound {len(pids)} process(es): {pids} (master={master_pid})")
     print(f"{'=' * 60}")
-    print(f"Baseline RSS:")
+    print("Baseline RSS:")
     for pid in pids:
         rss = baseline.get(pid, 0)
         role = "master" if len(pids) == 1 or pid == pids[0] and num_workers == 1 else f"worker-{pid}"
@@ -452,14 +469,14 @@ def main():
 
     # Summary table
     print(f"\n{'=' * 70}")
-    print(f"MEMORY SUMMARY")
+    print("MEMORY SUMMARY")
     print(f"{'=' * 70}")
     print(f"{'Process':<12} {'Baseline':>10} {'Idle':>10} {'Warmup':>10} {'Load':>10}")
     print(f"{'-' * 12} {'-' * 10} {'-' * 10} {'-' * 10} {'-' * 10}")
 
     # Find the latest load sample (closest to 60s)
-    latest_load_pid = None
     latest_load_time = -1
+    latest_load_sample = {}
     for t, sample in samples_load.items():
         if t > latest_load_time and sample:
             latest_load_time = t
@@ -493,7 +510,7 @@ def main():
 def measure_pids(master_pid, known_pids, baseline):
     """Measure RSS for all pids. Returns {pid: rss_kb}."""
     result = {}
-    
+
     # Try known pids first (including children of master)
     for pid in known_pids:
         try:
@@ -504,12 +521,11 @@ def measure_pids(master_pid, known_pids, baseline):
                         break
         except Exception:
             pass
-    
+
     # Also discover fresh children of master (workers may have restarted)
     try:
         child_out = subprocess.run(
-            ["ps", "--ppid", str(master_pid), "-o", "pid="],
-            capture_output=True, text=True
+            ["ps", "--ppid", str(master_pid), "-o", "pid="], capture_output=True, text=True
         ).stdout
         for line in child_out.splitlines():
             line = line.strip()
@@ -526,7 +542,7 @@ def measure_pids(master_pid, known_pids, baseline):
                     pass
     except Exception:
         pass
-    
+
     # Include master itself
     try:
         with open(f"/proc/{master_pid}/status") as f:
@@ -536,7 +552,7 @@ def measure_pids(master_pid, known_pids, baseline):
                     break
     except Exception:
         pass
-    
+
     return result
 
 
