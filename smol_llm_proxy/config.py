@@ -10,4 +10,4 @@ HTTPX_TIMEOUT: float = float(os.environ.get("HTTPX_TIMEOUT", "120"))
 
 
 def get_db_path() -> Path:
-    return Path(os.environ.get("DB_PATH", "data/llm_proxy.db"))
+    return Path(os.environ.get("DB_PATH", "data/proxy.db"))

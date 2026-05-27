@@ -5,9 +5,9 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across multiple users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
+A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 lines, ~53 MB RAM, ~5 ms overhead.
 
-An API proxy for llama.cpp. Multi-server routing, per-user keys, token accounting in less than 1000 lines of code. Minimal dependencies, ~5ms overhead.
+Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
 
 ## Features
 
@@ -73,15 +73,17 @@ curl -sO https://raw.githubusercontent.com/robolamp/smol-llm-proxy/main/config.e
 ```bash
 curl -X POST http://localhost:8000/admin/keys \
   -H "Authorization: Bearer $ADMIN_KEY" \
-  -d '{"name": "my-user", "active": true}'
+  -d '{"name": "my-user"}'
 ```
+
+The response contains a JSON object with a `key` field — that's the user's Bearer token. Save it; you'll need it for proxy requests.
 
 2. Send a chat completion with the user key:
 
 ```bash
 curl http://localhost:8000/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer sk-..." \
+  -H "Authorization: Bearer sk-<full-key-from-step-1>" \
   -d '{
     "model": "Qwen3.5-2B",
     "messages": [{"role": "user", "content": "Hello!"}],
@@ -116,7 +118,7 @@ aliases:
 | `ADMIN_KEY` | required | Bearer token for `/admin/*` endpoints |
 | `PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PROXY_PORT` | `8000` | Listen port |
-| `DB_PATH` | `./data/proxy.db` | SQLite database location |
+| `DB_PATH` | `data/proxy.db` | SQLite database location |
 | `CONFIG_PATH` | `./config.yaml` | Path to config file |
 
 For `pip install`, set them in shell or via a `.env`-like loader. For Docker Compose, put them in `.env`:
