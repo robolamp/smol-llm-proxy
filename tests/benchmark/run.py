@@ -19,8 +19,8 @@ DB_PATH = os.environ.get("DB_PATH", "/tmp/bench_proxy.db")
 CONFIG_PATH = str(SCRIPT_DIR / "config.yaml")
 
 MOCK_MODE = "--mock" in sys.argv
-
-MODE = sys.argv[1] if len(sys.argv) > 1 else "low"
+args = [a for a in sys.argv[1:] if a != "--mock"]
+MODE = args[0] if args else "low"
 MODES = {"low": (5, 30), "medium": (20, 60), "high": (100, 60)}
 USERS, DURATION = MODES.get(MODE, (5, 30))
 
@@ -72,6 +72,8 @@ def start_proxy(admin_key: str):
     env["DB_PATH"] = DB_PATH
     env["CONFIG_PATH"] = CONFIG_PATH
     env["PYTHONPATH"] = str(PROJECT_DIR)
+    if os.environ.get("BENCH_COLD_CACHE") == "1":
+        env["BENCH_COLD_CACHE"] = "1"
 
     log_path = "/tmp/proxy_bench.log"
     proc = subprocess.Popen(
@@ -202,7 +204,7 @@ def run_both_direct_mock(user_key: str):
         "--csv",
         "/tmp/bench_proxy",
     ]
-    env2 = {**os.environ, "BENCH_MODEL": "mock", "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": user_key}
+    env2 = {**os.environ, "BENCH_MODEL": "mock", "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": user_key, "BENCH_COLD_CACHE": "1"}
 
     t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
     t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
@@ -305,7 +307,7 @@ def run_both_parallel(key: str, direct_url: str, upstream_key: str, bench_model:
         "--csv",
         "/tmp/bench_proxy",
     ]
-    env2 = {**os.environ, "BENCH_MODEL": bench_model, "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key}
+    env2 = {**os.environ, "BENCH_MODEL": bench_model, "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key, "BENCH_COLD_CACHE": "1"}
 
     t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
     t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
@@ -372,6 +374,8 @@ def main():
         print(f"Proxy port: {PROXY_PORT}")
         print(f"DB: {DB_PATH}")
 
+        os.environ["BENCH_COLD_CACHE"] = "1"
+
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
 
@@ -383,6 +387,11 @@ def main():
                 except Exception:
                     pass
         time.sleep(1)
+
+        # Clean up stale timing data
+        timing_file = "/tmp/bench_proxy_timings.jsonl"
+        if os.path.exists(timing_file):
+            os.remove(timing_file)
 
         print("\nStarting mock server...")
         mock_proc = start_mock_server()
@@ -432,6 +441,8 @@ def main():
         print(f"Config: {CONFIG_PATH}")
         print(f"DB: {DB_PATH}")
 
+        os.environ["BENCH_COLD_CACHE"] = "1"
+
         if os.path.exists(DB_PATH):
             os.remove(DB_PATH)
 
@@ -443,6 +454,11 @@ def main():
                 except Exception:
                     pass
         time.sleep(1)
+
+        # Clean up stale timing data
+        timing_file = "/tmp/bench_proxy_timings.jsonl"
+        if os.path.exists(timing_file):
+            os.remove(timing_file)
 
         print("\nStarting proxy...")
         proc = start_proxy(admin_key)
@@ -511,6 +527,71 @@ def main():
     if proxy_fail_pct > 1.0:
         print("\nWARNING: Proxy has high failure rate!")
         sys.exit(1)
+
+ # Parse timing breakdown from headers (JSONL)
+    timing_file = "/tmp/bench_proxy_timings.jsonl"
+    timings = []
+    try:
+        if os.path.exists(timing_file):
+            with open(timing_file) as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        timings.append(json.loads(line))
+    except Exception:
+        pass
+
+    if timings:
+        print(f"\n{'=' * 50}")
+        print("Full timing breakdown (proxy overhead per-request)")
+        cache_mode = "COLD" if os.environ.get("BENCH_COLD_CACHE") == "1" else "WARM"
+        print(f"Cache mode: {cache_mode} | Collected {len(timings)} request timings\n")
+
+        def p(val, pct):
+            sorted_vals = sorted(val)
+            idx = int(len(sorted_vals) * pct / 100)
+            return f"{sorted_vals[min(idx, len(sorted_vals)-1)]:.2f}ms"
+
+        keys = [
+            ("x-proxy-body-read", "Body Read"),
+            ("x-proxy-json-parse", "JSON Parse"),
+            ("x-proxy-auth-time", "Auth (SHA256+DB)"),
+            ("x-proxy-route-time", "Route (JOIN query)"),
+            ("x-proxy-alias-time", "Alias lookup"),
+            ("x-proxy-serialize-time", "Serialize (if alias changed)"),
+            ("x-proxy-forward-time", "Forward (upstream)"),
+            ("x-proxy-parse-time", "Parse Response"),
+            ("x-proxy-pre-forward", "Pre-Forward Total"),
+            ("x-proxy-total-overhead", "Total Overhead"),
+        ]
+
+        print(f"\n{'Phase':<30} {'P50':>8} {'P95':>8} {'P99':>8} {'Mean':>8}")
+        print(f"{'-' * 30} {'-' * 8} {'-' * 8} {'-' * 8} {'-' * 8}")
+
+        for key, label in keys:
+            vals = [t.get(key, 0) for t in timings if key in t]
+            if not vals:
+                continue
+            print(f"{label:<30} {p(vals, 50):>8} {p(vals, 95):>8} {p(vals, 99):>8} {sum(vals)/len(vals):>7.2f}ms")
+
+        # Show overhead composition %
+        auths = [t.get("x-proxy-auth-time", 0) for t in timings if "x-proxy-auth-time" in t]
+        routes = [t.get("x-proxy-route-time", 0) for t in timings if "x-proxy-route-time" in t]
+        aliases = [t.get("x-proxy-alias-time", 0) for t in timings if "x-proxy-alias-time" in t]
+        body_reads = [t.get("x-proxy-body-read", 0) for t in timings if "x-proxy-body-read" in t]
+        json_parses = [t.get("x-proxy-json-parse", 0) for t in timings if "x-proxy-json-parse" in t]
+        serialize = [t.get("x-proxy-serialize-time", 0) for t in timings if "x-proxy-serialize-time" in t]
+        parses = [t.get("x-proxy-parse-time", 0) for t in timings if "x-proxy-parse-time" in t]
+        overheads = [t.get("x-proxy-total-overhead", 0) for t in timings if "x-proxy-total-overhead" in t]
+
+        if overheads:
+            avg_overhead = sum(overheads) / len(overheads)
+            print(f"\n{'Component':<30} {'Avg (ms)':>10} {'% of overhead':>14}")
+            print(f"{'-' * 30} {'-' * 10} {'-' * 14}")
+            for label, vals in [("Body Read", body_reads), ("JSON Parse", json_parses), ("Auth (SHA256+DB)", auths), ("Route (JOIN)", routes), ("Alias lookup", aliases), ("Serialize", serialize), ("Parse Response", parses)]:
+                avg = sum(vals) / len(vals) if vals else 0
+                pct = (avg / avg_overhead) * 100 if avg_overhead > 0 else 0
+                print(f"{label:<30} {avg:>10.2f} {pct:>13.1f}%")
 
 
 if __name__ == "__main__":

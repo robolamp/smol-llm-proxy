@@ -1,33 +1,19 @@
-"""Load and sync configuration from YAML file to database."""
-
 import os
 from pathlib import Path
-
 from .database import get_db
 from .cache import set_cached_alias, set_cached_route
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 
-
 def _load_yaml():
-    """Load config.yaml, return parsed dict or empty dict."""
     try:
         import yaml
-
         with open(CONFIG_PATH) as f:
             return yaml.safe_load(f) or {}
     except (FileNotFoundError, ImportError):
         return {}
 
-
 def sync_config():
-    """Sync servers, models, and aliases from config.yaml into SQLite.
-
-    - Servers not in DB → created
-    - Models not assigned to server → assigned
-    - Aliases not in DB → created
-    Existing entries are left untouched (idempotent).
-    """
     cfg = _load_yaml()
 
     servers = cfg.get("servers", [])
@@ -83,9 +69,3 @@ def sync_config():
                JOIN servers s ON s.id = sm.server_id WHERE s.active = 1"""
         ).fetchall():
             set_cached_route(row["model_name"], {"server_id": 0, "url": row["url"], "api_key": row["api_key"]})
-
-    # Populate key cache from DB
-    with get_db() as conn:
-        for row in conn.execute("SELECT id, key_hash, name, active FROM api_keys").fetchall():
-            pass
-            # We don't have raw key here, so we skip key cache population at startup

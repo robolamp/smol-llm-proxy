@@ -1,20 +1,15 @@
 """SQLite database schema and operations."""
-
 import sqlite3
 import threading
 from pathlib import Path
 from contextlib import contextmanager
-
 from .config import get_db_path
 from .cache import get_cached_route, set_cached_route
-
 
 def _row_to_dict(row):
     return dict(row) if row else None
 
-
 _thread_local = threading.local()
-
 
 def _get_connection(db_path: Path) -> sqlite3.Connection:
     if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
@@ -26,7 +21,6 @@ def _get_connection(db_path: Path) -> sqlite3.Connection:
         _thread_local.conn = conn
     return _thread_local.conn
 
-
 @contextmanager
 def get_db():
     conn = _get_connection(get_db_path())
@@ -37,7 +31,6 @@ def get_db():
         conn.rollback()
         raise
 
-
 def reset_db_connection():
     """Close and reset the thread-local DB connection. For testing."""
     if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
@@ -47,7 +40,6 @@ def reset_db_connection():
             pass
         _thread_local.conn = None
 
-
 def validate_key(key_hash: str):
     """Check if a key is valid and active. Returns key info or None."""
     with get_db() as conn:
@@ -56,7 +48,6 @@ def validate_key(key_hash: str):
             (key_hash,),
         ).fetchone()
     return _row_to_dict(row)
-
 
 def resolve_routing(key_id: int, model_name: str):
     """Resolve alias + find server for a given key. Returns server info or None."""
@@ -82,60 +73,18 @@ def resolve_routing(key_id: int, model_name: str):
         set_cached_route(cache_key, result)
     return result
 
-
 def init_db():
     get_db_path().parent.mkdir(parents=True, exist_ok=True)
     with get_db() as conn:
         conn.executescript("""
-            CREATE TABLE IF NOT EXISTS servers (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL,
-                url TEXT NOT NULL,
-                api_key TEXT DEFAULT '',
-                active INTEGER NOT NULL DEFAULT 1
-            );
-
-            CREATE TABLE IF NOT EXISTS server_models (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-                model_name TEXT NOT NULL,
-                UNIQUE(server_id, model_name)
-            );
-
+            CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, url TEXT NOT NULL, api_key TEXT DEFAULT '', active INTEGER NOT NULL DEFAULT 1);
+            CREATE TABLE IF NOT EXISTS server_models (id INTEGER PRIMARY KEY AUTOINCREMENT, server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE, model_name TEXT NOT NULL, UNIQUE(server_id, model_name));
             CREATE INDEX IF NOT EXISTS idx_server_models_model ON server_models(model_name);
-
-            CREATE TABLE IF NOT EXISTS model_aliases (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                alias_name TEXT UNIQUE NOT NULL,
-                real_model_name TEXT NOT NULL
-            );
-
+            CREATE TABLE IF NOT EXISTS model_aliases (id INTEGER PRIMARY KEY AUTOINCREMENT, alias_name TEXT UNIQUE NOT NULL, real_model_name TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_model_aliases_alias ON model_aliases(alias_name);
-
-            CREATE TABLE IF NOT EXISTS api_keys (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key_hash TEXT UNIQUE NOT NULL,
-                name TEXT NOT NULL,
-                active INTEGER NOT NULL DEFAULT 1,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
+            CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key_hash TEXT UNIQUE NOT NULL, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-
-            CREATE TABLE IF NOT EXISTS usage_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,
-                server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-                model_name TEXT NOT NULL,
-                real_model_name TEXT NOT NULL DEFAULT '',
-                prompt_tokens INTEGER NOT NULL DEFAULT 0,
-                completion_tokens INTEGER NOT NULL DEFAULT 0,
-                total_tokens INTEGER NOT NULL DEFAULT 0,
-                prompt_ms REAL DEFAULT 0,
-                predicted_ms REAL DEFAULT 0,
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-            );
-
+            CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE, model_name TEXT NOT NULL, real_model_name TEXT NOT NULL DEFAULT '', prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0, prompt_ms REAL DEFAULT 0, predicted_ms REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_key ON usage_logs(key_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_server ON usage_logs(server_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);

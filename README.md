@@ -5,14 +5,14 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 lines, ~53 MB RAM, ~5 ms overhead.
+A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 lines, ~53 MB RAM, ~0.2ms overhead.
 
 Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
 
 ## Features
 
 - Per-user API keys (create / delete / toggle active)
-- Multi-server routing by model name with in-memory cache (~5ms overhead)
+- Multi-server routing by model name with in-memory cache
 - Model aliases (`alias` -> `model-name.gguf`)
 - Token usage logging: prompt/completion tokens, timings
 - Streaming and non-streaming proxy support
@@ -181,15 +181,17 @@ curl "http://localhost:8000/admin/usage?key_id=1" \
 
 Proxy overhead measured with Locust using **parallel concurrent execution** — both benchmarks (direct and proxy) hit the same backend simultaneously for a fair comparison.
 
+All requests authenticated, routed, and logged via SQLite on every call (cold cache mode). In-memory cache disabled to measure worst-case per-request overhead.
+
 **Hardware:** i9-14900K, RTX 4090 | **Model:** Qwen3.5-2B-GGUF | **Backend:** llama.cpp server
 
 ### Mock backend (fixed 100ms delay, clean conditions)
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | 0ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 49.2 | 48.4 | -0.8 |
-| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 194.8 | 191.3 | -3.6 |
-| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 130ms | +20ms | 102ms | 108ms | +5ms | 896.0 | 853.5 | -42.5 |
+| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | 0ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 49.3 | 48.4 | -0.9 |
+| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 110ms | 130ms | +20ms | 101ms | 104ms | +2ms | 194.8 | 190.9 | -3.9 |
+| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 130ms | +20ms | 102ms | 107ms | +4ms | 896.2 | 860.3 | -35.9 |
 
 ### Real llama-server backend
 
@@ -197,8 +199,9 @@ Proxy overhead measured with Locust using **parallel concurrent execution** — 
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
 | Low | 5+5 | 570ms | 570ms | +0ms | 940ms | 930ms | -10ms | ~1200ms | ~1100ms | ~0ms | 605ms | 604ms | -1ms | 8.2 | 8.2 | 0.0 |
 | Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~14000ms | ~14000ms | ~0ms | ~2413ms | ~2460ms | +47ms | 8.0 | 7.9 | -0.1 |
+| High | 100+100 | 12000ms | 12000ms | ~0ms | 13000ms | 13000ms | ~0ms | 13000ms | 13000ms | ~0ms | 10073ms | 10058ms | -15ms | 8.1 | 8.1 | -0.0 |
 
-Proxy overhead on clean conditions (mock): **~2-5ms** P50, **+20ms** P99 across all load levels with 4 uvicorn workers. Against real backend: **negligible** — P50/P95/P99 within measurement noise (~1s variance at tail).
+Proxy overhead on clean conditions (mock): **~2ms** mean, **+20ms** P99 across all load levels with 4 uvicorn workers. Against real backend: **negligible** — latency identical within measurement noise (~1s variance at tail).
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint
@@ -212,6 +215,8 @@ Per-worker baseline: **~53 MB**, load growth: **+4–6 MB** per worker.
 Identical footprint against mock and real backends — the proxy forwards without buffering responses. No memory growth observed across extended runs.
 
 ### Caveat
+
+The aggregate overhead numbers (+2-4ms mean, +20ms P99 on mock) include asyncio event loop contention at high concurrency (100+ concurrent users per worker). Per-request proxy logic itself is **~0.18ms** — the difference comes from how asyncio handles many simultaneous awaits on a single thread. With 4 uvicorn workers, each worker handles ~25 requests, keeping contention minimal.
 
 Real backend P99 spikes (Medium mode, ~14s) are caused by llama.cpp single-thread inference bottleneck under 20 concurrent users — not proxy overhead. Proxy adds negligible latency regardless of backend saturation.
 
@@ -232,7 +237,7 @@ If you self-host several llama-server instances on one or more machines and want
                         │                  [llama-server 2 :port]
                         │                  [llama-server N :port]
                         │
-                        ├── in-memory cache (keys, aliases, routes)
+                        ├── in-memory cache (keys, aliases, routes) — TTL 30s
                         ├── validate API key + resolve routing (SQLite on first call, then cache)
                         ├── forward request via connection-pooled httpx client
                         └── async log tokens + timings (background worker, no blocking)
