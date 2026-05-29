@@ -1,4 +1,5 @@
 """Configuration for smol-llm-proxy."""
+
 import os
 from pathlib import Path
 

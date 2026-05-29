@@ -204,7 +204,13 @@ def run_both_direct_mock(user_key: str):
         "--csv",
         "/tmp/bench_proxy",
     ]
-    env2 = {**os.environ, "BENCH_MODEL": "mock", "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": user_key, "BENCH_COLD_CACHE": "1"}
+    env2 = {
+        **os.environ,
+        "BENCH_MODEL": "mock",
+        "PROXY_URL": f"http://localhost:{PROXY_PORT}",
+        "USER_KEY": user_key,
+        "BENCH_COLD_CACHE": "1",
+    }
 
     t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
     t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
@@ -307,7 +313,13 @@ def run_both_parallel(key: str, direct_url: str, upstream_key: str, bench_model:
         "--csv",
         "/tmp/bench_proxy",
     ]
-    env2 = {**os.environ, "BENCH_MODEL": bench_model, "PROXY_URL": f"http://localhost:{PROXY_PORT}", "USER_KEY": key, "BENCH_COLD_CACHE": "1"}
+    env2 = {
+        **os.environ,
+        "BENCH_MODEL": bench_model,
+        "PROXY_URL": f"http://localhost:{PROXY_PORT}",
+        "USER_KEY": key,
+        "BENCH_COLD_CACHE": "1",
+    }
 
     t1 = threading.Thread(target=run_and_capture, args=(cmd1, env1, "DIRECT"))
     t2 = threading.Thread(target=run_and_capture, args=(cmd2, env2, "PROXY"))
@@ -528,7 +540,7 @@ def main():
         print("\nWARNING: Proxy has high failure rate!")
         sys.exit(1)
 
- # Parse timing breakdown from headers (JSONL)
+    # Parse timing breakdown from headers (JSONL)
     timing_file = "/tmp/bench_proxy_timings.jsonl"
     timings = []
     try:
@@ -550,7 +562,7 @@ def main():
         def p(val, pct):
             sorted_vals = sorted(val)
             idx = int(len(sorted_vals) * pct / 100)
-            return f"{sorted_vals[min(idx, len(sorted_vals)-1)]:.2f}ms"
+            return f"{sorted_vals[min(idx, len(sorted_vals) - 1)]:.2f}ms"
 
         keys = [
             ("x-proxy-body-read", "Body Read"),
@@ -572,7 +584,7 @@ def main():
             vals = [t.get(key, 0) for t in timings if key in t]
             if not vals:
                 continue
-            print(f"{label:<30} {p(vals, 50):>8} {p(vals, 95):>8} {p(vals, 99):>8} {sum(vals)/len(vals):>7.2f}ms")
+            print(f"{label:<30} {p(vals, 50):>8} {p(vals, 95):>8} {p(vals, 99):>8} {sum(vals) / len(vals):>7.2f}ms")
 
         # Show overhead composition %
         auths = [t.get("x-proxy-auth-time", 0) for t in timings if "x-proxy-auth-time" in t]
@@ -588,7 +600,15 @@ def main():
             avg_overhead = sum(overheads) / len(overheads)
             print(f"\n{'Component':<30} {'Avg (ms)':>10} {'% of overhead':>14}")
             print(f"{'-' * 30} {'-' * 10} {'-' * 14}")
-            for label, vals in [("Body Read", body_reads), ("JSON Parse", json_parses), ("Auth (SHA256+DB)", auths), ("Route (JOIN)", routes), ("Alias lookup", aliases), ("Serialize", serialize), ("Parse Response", parses)]:
+            for label, vals in [
+                ("Body Read", body_reads),
+                ("JSON Parse", json_parses),
+                ("Auth (SHA256+DB)", auths),
+                ("Route (JOIN)", routes),
+                ("Alias lookup", aliases),
+                ("Serialize", serialize),
+                ("Parse Response", parses),
+            ]:
                 avg = sum(vals) / len(vals) if vals else 0
                 pct = (avg / avg_overhead) * 100 if avg_overhead > 0 else 0
                 print(f"{label:<30} {avg:>10.2f} {pct:>13.1f}%")

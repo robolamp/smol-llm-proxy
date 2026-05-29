@@ -1,4 +1,5 @@
 """Token counting and usage logging."""
+
 import asyncio
 
 _usage_queue: asyncio.Queue = None
@@ -10,12 +11,14 @@ _INSERT_SQL = (
     "prompt_ms, predicted_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 )
 
+
 def _init_async_logger():
     global _usage_queue, _logger_task
     if _usage_queue is not None:
         return
     _usage_queue = asyncio.Queue(maxsize=1000)
     _logger_task = asyncio.create_task(_log_worker())
+
 
 async def _log_worker():
     batch = []
@@ -32,6 +35,7 @@ async def _log_worker():
             _flush_batch(batch)
             batch.clear()
 
+
 def _flush_batch(batch):
     from .database import get_db
 
@@ -45,27 +49,46 @@ def _flush_batch(batch):
 
 def _insert_log(conn, item: dict):
     total = item["prompt_tokens"] + item["completion_tokens"]
-    conn.execute(_INSERT_SQL, (
-        item["key_id"], item["server_id"], item["model_name"],
-        item["real_model_name"], item["prompt_tokens"],
-        item["completion_tokens"], total,
-        item["prompt_ms"], item["predicted_ms"],
-    ))
+    conn.execute(
+        _INSERT_SQL,
+        (
+            item["key_id"],
+            item["server_id"],
+            item["model_name"],
+            item["real_model_name"],
+            item["prompt_tokens"],
+            item["completion_tokens"],
+            total,
+            item["prompt_ms"],
+            item["predicted_ms"],
+        ),
+    )
 
 
 def enqueue_usage(
-    key_id: int, server_id: int, model_name: str, real_model_name: str,
-    prompt_tokens: int, completion_tokens: int,
-    prompt_ms: float = 0.0, predicted_ms: float = 0.0,
+    key_id: int,
+    server_id: int,
+    model_name: str,
+    real_model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    prompt_ms: float = 0.0,
+    predicted_ms: float = 0.0,
 ):
     if _usage_queue is None:
         _init_async_logger()
-    _usage_queue.put_nowait({
-        "key_id": key_id, "server_id": server_id,
-        "model_name": model_name, "real_model_name": real_model_name,
-        "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-        "prompt_ms": prompt_ms, "predicted_ms": predicted_ms,
-    })
+    _usage_queue.put_nowait(
+        {
+            "key_id": key_id,
+            "server_id": server_id,
+            "model_name": model_name,
+            "real_model_name": real_model_name,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "prompt_ms": prompt_ms,
+            "predicted_ms": predicted_ms,
+        }
+    )
 
 
 async def _shutdown_async_logger():
@@ -88,6 +111,7 @@ async def _shutdown_async_logger():
         except asyncio.CancelledError:
             pass
 
+
 def flush_usage_logs():
     if _usage_queue is None:
         return
@@ -101,15 +125,32 @@ def flush_usage_logs():
     if batch:
         _flush_batch(batch)
 
-def log_usage(conn, key_id: int, server_id: int, model_name: str, real_model_name: str,
-              prompt_tokens: int, completion_tokens: int, prompt_ms: float = 0.0, predicted_ms: float = 0.0):
+
+def log_usage(
+    conn,
+    key_id: int,
+    server_id: int,
+    model_name: str,
+    real_model_name: str,
+    prompt_tokens: int,
+    completion_tokens: int,
+    prompt_ms: float = 0.0,
+    predicted_ms: float = 0.0,
+):
     """Write a usage log entry directly to an open connection."""
-    _insert_log(conn, {
-        "key_id": key_id, "server_id": server_id, "model_name": model_name,
-        "real_model_name": real_model_name, "prompt_tokens": prompt_tokens,
-        "completion_tokens": completion_tokens, "prompt_ms": prompt_ms,
-        "predicted_ms": predicted_ms,
-    })
+    _insert_log(
+        conn,
+        {
+            "key_id": key_id,
+            "server_id": server_id,
+            "model_name": model_name,
+            "real_model_name": real_model_name,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "prompt_ms": prompt_ms,
+            "predicted_ms": predicted_ms,
+        },
+    )
 
 
 def _build_where(filters: dict, table_prefix: str = "") -> tuple[str, list]:
@@ -125,6 +166,7 @@ def _build_where(filters: dict, table_prefix: str = "") -> tuple[str, list]:
     if clauses:
         where = "WHERE " + " AND ".join(clauses)
     return where, params
+
 
 def _query_with_filters(query_template: str, filters: dict) -> list[dict]:
     from .database import get_db
@@ -156,6 +198,7 @@ def get_usage_logs(key_id=None, server_id=None, start_date=None, end_date=None):
         "JOIN servers s ON ul.server_id = s.id {where} ORDER BY ul.created_at DESC"
     )
     return _query_with_filters(query_template, filters)
+
 
 def get_usage_summary(key_id=None, server_id=None):
     filters = {}

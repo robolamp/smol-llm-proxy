@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 
 set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
+
 async def _read_json_body(request: Request) -> tuple[bytes, dict]:
     body = await request.body()
     try:
@@ -24,19 +25,24 @@ async def _read_json_body(request: Request) -> tuple[bytes, dict]:
         raise HTTPException(status_code=400, detail="Invalid JSON")
     return body, data
 
+
 @asynccontextmanager
 async def lifespan(app):
     init_db()
     from smol_llm_proxy.config_loader import sync_config, CONFIG_PATH
+
     print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
     yield
     from smol_llm_proxy.proxy import shutdown_httpx_client
     from smol_llm_proxy.metrics import _shutdown_async_logger
+
     await shutdown_httpx_client()
     await _shutdown_async_logger()
 
+
 app = FastAPI(title="smol-llm-proxy", lifespan=lifespan)
+
 
 def _check_admin(authorization: str | None):
     """Validate admin Bearer token."""
@@ -45,6 +51,7 @@ def _check_admin(authorization: str | None):
     token = authorization[7:].strip()
     if token != ADMIN_KEY:
         raise HTTPException(status_code=403, detail="Invalid admin key")
+
 
 @app.post("/admin/servers")
 async def admin_create_server(request: Request, authorization: str | None = Header(None)):
@@ -61,12 +68,14 @@ async def admin_create_server(request: Request, authorization: str | None = Head
     clear_route_cache()
     return {"ok": True, "id": cursor.lastrowid}
 
+
 @app.get("/admin/servers")
 async def admin_list_servers(authorization: str | None = Header(None)):
     _check_admin(authorization)
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM servers ORDER BY id").fetchall()
     return [dict(r) for r in rows]
+
 
 @app.delete("/admin/servers/{server_id}")
 async def admin_delete_server(server_id: int, authorization: str | None = Header(None)):
@@ -77,6 +86,7 @@ async def admin_delete_server(server_id: int, authorization: str | None = Header
         raise HTTPException(status_code=404, detail="Server not found")
     clear_route_cache()
     return {"ok": True}
+
 
 @app.patch("/admin/servers/{server_id}")
 async def admin_update_server(server_id: int, request: Request, authorization: str | None = Header(None)):
@@ -94,6 +104,7 @@ async def admin_update_server(server_id: int, request: Request, authorization: s
     with get_db() as conn:
         conn.execute(f"UPDATE servers SET {', '.join(fields)} WHERE id = ?", params)
     return {"ok": True}
+
 
 @app.post("/admin/servers/{server_id}/models")
 async def admin_assign_model(server_id: int, request: Request, authorization: str | None = Header(None)):
@@ -113,6 +124,7 @@ async def admin_assign_model(server_id: int, request: Request, authorization: st
     clear_route_cache()
     return {"ok": True}
 
+
 @app.delete("/admin/servers/{server_id}/models/{model_name}")
 async def admin_unassign_model(server_id: int, model_name: str, authorization: str | None = Header(None)):
     _check_admin(authorization)
@@ -123,6 +135,7 @@ async def admin_unassign_model(server_id: int, model_name: str, authorization: s
         )
     clear_route_cache()
     return {"ok": True}
+
 
 @app.post("/admin/aliases")
 async def admin_create_alias(request: Request, authorization: str | None = Header(None)):
@@ -143,6 +156,7 @@ async def admin_create_alias(request: Request, authorization: str | None = Heade
     clear_alias_cache()
     return {"ok": True}
 
+
 @app.delete("/admin/aliases/{alias_name}")
 async def admin_delete_alias(alias_name: str, authorization: str | None = Header(None)):
     _check_admin(authorization)
@@ -151,12 +165,14 @@ async def admin_delete_alias(alias_name: str, authorization: str | None = Header
     clear_alias_cache()
     return {"ok": True}
 
+
 @app.get("/admin/aliases")
 async def admin_list_aliases(authorization: str | None = Header(None)):
     _check_admin(authorization)
     with get_db() as conn:
         rows = conn.execute("SELECT * FROM model_aliases ORDER BY id").fetchall()
     return [dict(r) for r in rows]
+
 
 @app.post("/admin/keys")
 async def admin_create_key(request: Request, authorization: str | None = Header(None)):
@@ -166,6 +182,7 @@ async def admin_create_key(request: Request, authorization: str | None = Header(
     result = create_api_key(name)
     return {"ok": True, "id": result["id"], "key": result["key"], "name": result["name"]}
 
+
 @app.delete("/admin/keys/{key_id}")
 async def admin_delete_key(key_id: int, authorization: str | None = Header(None)):
     _check_admin(authorization)
@@ -173,6 +190,7 @@ async def admin_delete_key(key_id: int, authorization: str | None = Header(None)
     if not deleted:
         raise HTTPException(status_code=404, detail="Key not found")
     return {"ok": True}
+
 
 @app.patch("/admin/keys/{key_id}/toggle")
 async def admin_toggle_key(key_id: int, request: Request, authorization: str | None = Header(None)):
@@ -184,15 +202,19 @@ async def admin_toggle_key(key_id: int, request: Request, authorization: str | N
         raise HTTPException(status_code=404, detail="Key not found")
     return result
 
+
 @app.get("/admin/keys")
 async def admin_list_keys(authorization: str | None = Header(None)):
     _check_admin(authorization)
     return list_api_keys()
 
+
 @app.get("/admin/usage")
 async def admin_get_usage(
-    key_id: str | None = None, server_id: str | None = None,
-    start_date: str | None = None, end_date: str | None = None,
+    key_id: str | None = None,
+    server_id: str | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
     authorization: str | None = Header(None),
 ):
     _check_admin(authorization)
@@ -212,6 +234,7 @@ async def admin_get_usage(
     summary = get_usage_summary(**filters)
     return {"logs": logs, "summary": summary}
 
+
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
     return await _proxy_completions(request, "v1/chat/completions")
@@ -221,6 +244,7 @@ async def proxy_chat_completions(request: Request):
 async def proxy_completions(request: Request):
     return await _proxy_completions(request, "v1/completions")
 
+
 async def _proxy_completions(request: Request, path: str):
     body_bytes, data = await _read_json_body(request)
     is_streaming = data.get("stream", False)
@@ -228,13 +252,16 @@ async def _proxy_completions(request: Request, path: str):
         return await proxy_streaming(request, path, body_bytes=body_bytes, body_json=data)
     return await proxy_non_streaming(request, path, body_bytes=body_bytes, body_json=data)
 
+
 @app.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
     return await proxy_non_streaming(request, "v1/embeddings")
 
+
 @app.get("/v1/models")
 async def proxy_models():
     return await proxy_public(b"")
+
 
 @app.get("/health")
 async def health():
@@ -246,6 +273,7 @@ async def health():
         return {"status": "ok", "active_servers": servers}
     except Exception:
         return Response(content='{"status":"error"}', media_type="application/json", status_code=503)
+
 
 if __name__ == "__main__":
     import uvicorn

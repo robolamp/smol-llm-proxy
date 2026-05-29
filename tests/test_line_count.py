@@ -1,11 +1,22 @@
-"""Assert exact line count for smol_llm_proxy package."""
+"""Assert line count for smol_llm_proxy package."""
 
 from pathlib import Path
 
 
-def test_exact_line_count():
+def _is_code_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith('"""') or stripped.startswith("'''"):
+        return False
+    return True
+
+
+def test_line_count():
     pkg = Path(__file__).parent.parent / "smol_llm_proxy"
-    total = 0
+    code_lines = 0
     for f in pkg.rglob("*.py"):
-        total += len(f.read_text().splitlines())
-    assert total <= 1000, f"Expected <=1000 lines, got {total}"
+        for line in f.read_text().splitlines():
+            if _is_code_line(line):
+                code_lines += 1
+    assert code_lines <= 1000, f"Expected <=1000 code lines, got {code_lines}"

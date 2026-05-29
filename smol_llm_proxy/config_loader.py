@@ -5,13 +5,16 @@ from .cache import set_cached_alias, set_cached_route
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))
 
+
 def _load_yaml():
     try:
         import yaml
+
         with open(CONFIG_PATH) as f:
             return yaml.safe_load(f) or {}
     except (FileNotFoundError, ImportError):
         return {}
+
 
 def sync_config():
     cfg = _load_yaml()

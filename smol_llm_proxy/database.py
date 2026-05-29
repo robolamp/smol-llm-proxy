@@ -1,4 +1,5 @@
 """SQLite database schema and operations."""
+
 import sqlite3
 import threading
 from pathlib import Path
@@ -6,10 +7,13 @@ from contextlib import contextmanager
 from .config import get_db_path
 from .cache import get_cached_route, set_cached_route
 
+
 def _row_to_dict(row):
     return dict(row) if row else None
 
+
 _thread_local = threading.local()
+
 
 def _get_connection(db_path: Path) -> sqlite3.Connection:
     if not hasattr(_thread_local, "conn") or _thread_local.conn is None:
@@ -21,6 +25,7 @@ def _get_connection(db_path: Path) -> sqlite3.Connection:
         _thread_local.conn = conn
     return _thread_local.conn
 
+
 @contextmanager
 def get_db():
     conn = _get_connection(get_db_path())
@@ -31,6 +36,7 @@ def get_db():
         conn.rollback()
         raise
 
+
 def reset_db_connection():
     """Close and reset the thread-local DB connection. For testing."""
     if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
@@ -40,6 +46,7 @@ def reset_db_connection():
             pass
         _thread_local.conn = None
 
+
 def validate_key(key_hash: str):
     """Check if a key is valid and active. Returns key info or None."""
     with get_db() as conn:
@@ -48,6 +55,7 @@ def validate_key(key_hash: str):
             (key_hash,),
         ).fetchone()
     return _row_to_dict(row)
+
 
 def resolve_routing(key_id: int, model_name: str):
     """Resolve alias + find server for a given key. Returns server info or None."""
@@ -72,6 +80,7 @@ def resolve_routing(key_id: int, model_name: str):
     if result:
         set_cached_route(cache_key, result)
     return result
+
 
 def init_db():
     get_db_path().parent.mkdir(parents=True, exist_ok=True)

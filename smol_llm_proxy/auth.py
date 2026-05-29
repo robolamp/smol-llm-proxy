@@ -1,14 +1,18 @@
 """API key management: CRUD and validation with SHA256 hashing."""
+
 import hashlib
 import secrets
 from .database import get_db
 from .cache import get_cached_key, set_cached_key, clear_key_cache
 
+
 def _row_to_dict(row) -> dict:
     return dict(row) if row else None
 
+
 def _hash_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode()).hexdigest()
+
 
 def create_api_key(name: str) -> dict:
     raw_key = "sk-" + secrets.token_hex(24)
@@ -22,6 +26,7 @@ def create_api_key(name: str) -> dict:
         key_id = cursor.lastrowid
     clear_key_cache()
     return {"id": key_id, "key": raw_key, "name": name}
+
 
 def _find_key_info(raw_key: str):
     """Find key info by direct hash lookup."""
@@ -40,12 +45,14 @@ def _find_key_info(raw_key: str):
         set_cached_key(key_hash, info)
     return info
 
+
 def delete_api_key(key_id: int) -> bool:
     with get_db() as conn:
         cursor = conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id,))
     if cursor.rowcount > 0:
         clear_key_cache()
     return cursor.rowcount > 0
+
 
 def toggle_api_key(key_id: int, active: bool):
     with get_db() as conn:
@@ -60,10 +67,12 @@ def toggle_api_key(key_id: int, active: bool):
     clear_key_cache()
     return _row_to_dict(row)
 
+
 def list_api_keys() -> list[dict]:
     with get_db() as conn:
         rows = conn.execute("SELECT id, name, active, created_at FROM api_keys ORDER BY created_at DESC").fetchall()
     return [_row_to_dict(r) for r in rows]
+
 
 def validate_api_key(raw_key: str):
     info = _find_key_info(raw_key)
