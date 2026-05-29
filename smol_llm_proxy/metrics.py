@@ -39,8 +39,9 @@ def _flush_batch(batch):
         for item in batch:
             try:
                 _insert_log(conn, item)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Usage log failed: {e}", flush=True)
+
 
 def _insert_log(conn, item: dict):
     total = item["prompt_tokens"] + item["completion_tokens"]
@@ -50,6 +51,7 @@ def _insert_log(conn, item: dict):
         item["completion_tokens"], total,
         item["prompt_ms"], item["predicted_ms"],
     ))
+
 
 def enqueue_usage(
     key_id: int, server_id: int, model_name: str, real_model_name: str,

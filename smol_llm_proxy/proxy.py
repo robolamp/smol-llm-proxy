@@ -72,7 +72,7 @@ def _parse_usage_from_body(body_bytes: bytes) -> tuple[int, int, float, float]:
         timings.get("predicted_ms", 0.0) or 0.0,
     )
 
-async def _build_proxy_context(request: Request, path: str):
+async def _build_proxy_context(request: Request, path: str, *, body_bytes=None, body_json=None):
     """Extract auth info, resolve routing."""
     t0 = time.perf_counter()
 
@@ -80,13 +80,15 @@ async def _build_proxy_context(request: Request, path: str):
     if not user_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
 
-    body_bytes = await request.body()
+    if body_bytes is None:
+        body_bytes = await request.body()
     body_read_ms = (time.perf_counter() - t0) * 1000
 
-    try:
-        body_json = orjson.loads(body_bytes)
-    except orjson.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Invalid JSON body")
+    if body_json is None:
+        try:
+            body_json = orjson.loads(body_bytes)
+        except orjson.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
     json_parse_ms = (time.perf_counter() - t0) * 1000
 
     model_name = body_json.get("model", "")
@@ -120,6 +122,7 @@ async def _build_proxy_context(request: Request, path: str):
     }
     return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing
 
+
 def _build_upstream(server: dict, request: Request, path: str) -> tuple[str, dict]:
     target_url = _format_server_url(server["url"], path)
     upstream_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "authorization")}
@@ -140,26 +143,21 @@ def _timing_headers(timing: dict, forward_ms: float, parse_ms: float, pre_forwar
         "X-Proxy-Total-Overhead": f"{proxy_overhead:.2f}ms",
     }
 
-async def _proxy_setup(request: Request, path: str):
-    key_info, routing, display_name, real_model_name, _, body_bytes, timing = await _build_proxy_context(request, path)
+async def _proxy_setup(request: Request, path: str, *, body_bytes=None, body_json=None):
+    key_info, routing, display_name, real_model_name, _, body_bytes, timing = await _build_proxy_context(request, path, body_bytes=body_bytes, body_json=body_json)
     server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
     target_url, upstream_headers = _build_upstream(server, request, path)
     return key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers
 
-async def proxy_non_streaming(request: Request, path: str):
+async def proxy_non_streaming(request: Request, path: str, *, body_bytes=None, body_json=None):
     t0 = time.perf_counter()
 
-    key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers = await _proxy_setup(request, path)
+    key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
 
     pre_forward_ms = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
-    try:
-        status_code, resp_body = await _forward_request(target_url, upstream_headers, body_bytes, request.method)
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Server request timed out")
+    status_code, resp_body = await _forward_request(target_url, upstream_headers, body_bytes, request.method)
     forward_ms = (time.perf_counter() - t0) * 1000
 
     t0 = time.perf_counter()
@@ -177,8 +175,8 @@ async def proxy_non_streaming(request: Request, path: str):
         headers=_timing_headers(timing, forward_ms, parse_ms, pre_forward_ms, proxy_overhead),
     )
 
-async def proxy_streaming(request: Request, path: str):
-    key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers = await _proxy_setup(request, path)
+async def proxy_streaming(request: Request, path: str, *, body_bytes=None, body_json=None):
+    key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
 
     total_prompt = 0
     total_completion = 0

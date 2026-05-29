@@ -1,7 +1,7 @@
 """Tests for proxy endpoints (integration with mock backend)."""
 
 import json
-from unittest.mock import patch, AsyncMock
+from unittest.mock import patch, AsyncMock, Mock
 
 
 def _mock_response(model_name="model.gguf"):
@@ -71,8 +71,8 @@ class TestProxyForwarding:
         from httpx import ConnectError
 
         with patch(
-            "smol_llm_proxy.proxy._forward_request",
-            new=AsyncMock(side_effect=ConnectError("refused")),
+            "smol_llm_proxy.proxy.get_httpx_client",
+            new=Mock(return_value=AsyncMock(request=AsyncMock(side_effect=ConnectError("refused")))),
         ):
             resp = client.post(
                 "/v1/chat/completions",

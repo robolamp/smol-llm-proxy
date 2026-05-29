@@ -16,13 +16,13 @@ from contextlib import asynccontextmanager
 
 set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
-async def _read_json_body(request: Request) -> dict:
+async def _read_json_body(request: Request) -> tuple[bytes, dict]:
     body = await request.body()
     try:
         data = orjson.loads(body)
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    return data
+    return body, data
 
 @asynccontextmanager
 async def lifespan(app):
@@ -222,11 +222,11 @@ async def proxy_completions(request: Request):
     return await _proxy_completions(request, "v1/completions")
 
 async def _proxy_completions(request: Request, path: str):
-    data = await _read_json_body(request)
+    body_bytes, data = await _read_json_body(request)
     is_streaming = data.get("stream", False)
     if is_streaming:
-        return await proxy_streaming(request, path)
-    return await proxy_non_streaming(request, path)
+        return await proxy_streaming(request, path, body_bytes=body_bytes, body_json=data)
+    return await proxy_non_streaming(request, path, body_bytes=body_bytes, body_json=data)
 
 @app.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
