@@ -5,7 +5,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 lines, ~53 MB RAM, ~0.2ms overhead.
+A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 code lines (excluding blanks, docstrings, comments), ~53 MB RAM, ~0.2ms overhead.
 
 Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
 
