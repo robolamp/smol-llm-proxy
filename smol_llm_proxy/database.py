@@ -8,10 +8,6 @@ from .config import get_db_path
 from .cache import get_cached_route, set_cached_route
 
 
-def _row_to_dict(row):
-    return dict(row) if row else None
-
-
 _thread_local = threading.local()
 
 
@@ -54,7 +50,7 @@ def validate_key(key_hash: str):
             "SELECT id, name FROM api_keys WHERE key_hash = ? AND active = 1 LIMIT 1",
             (key_hash,),
         ).fetchone()
-    return _row_to_dict(row)
+    return dict(row) if row else None
 
 
 def resolve_routing(key_id: int, model_name: str):
@@ -76,7 +72,7 @@ def resolve_routing(key_id: int, model_name: str):
               LIMIT 1""",
             (model_name, model_name, model_name, key_id),
         ).fetchone()
-    result = _row_to_dict(row)
+    result = dict(row) if row else None
     if result:
         set_cached_route(cache_key, result)
     return result

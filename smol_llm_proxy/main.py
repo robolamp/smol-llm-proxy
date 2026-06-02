@@ -276,6 +276,8 @@ async def health():
 
 
 if __name__ == "__main__":
+    import sys
     import uvicorn
 
-    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT)
+    loop = "uvloop" if sys.platform != "win32" else "asyncio"
+    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT, loop=loop)
