@@ -191,7 +191,7 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
 | Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | 0ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 49.3 | 48.4 | -0.9 |
 | Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 110ms | 130ms | +20ms | 101ms | 104ms | +2ms | 194.8 | 190.9 | -3.9 |
-| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 130ms | +20ms | 102ms | 107ms | +4ms | 896.2 | 860.3 | -35.9 |
+| High | 100+100 | 100ms | 110ms | +10ms | 110ms | 120ms | +10ms | 110ms | 120ms | +10ms | 102ms | 107ms | +5ms | 894.8 | 857.0 | -37.9 |
 
 ### Real llama-server backend
 
@@ -201,7 +201,7 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 | Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~14000ms | ~14000ms | ~0ms | ~2413ms | ~2460ms | +47ms | 8.0 | 7.9 | -0.1 |
 | High | 100+100 | 12000ms | 12000ms | ~0ms | 13000ms | 13000ms | ~0ms | 13000ms | 13000ms | ~0ms | 10073ms | 10058ms | -15ms | 8.1 | 8.1 | -0.0 |
 
-Proxy overhead on clean conditions (mock): **~2ms** mean, **+20ms** P99 across all load levels with 4 uvicorn workers. Against real backend: **negligible** — latency identical within measurement noise (~1s variance at tail).
+Proxy overhead on clean conditions (mock): **~2ms** mean, **+10–20ms** P99 across all load levels with 4 uvicorn workers + uvloop. Against real backend: **negligible** — latency identical within measurement noise (~1s variance at tail).
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint
@@ -216,7 +216,7 @@ Identical footprint against mock and real backends — the proxy forwards withou
 
 ### Caveat
 
-The aggregate overhead numbers (+2-4ms mean, +20ms P99 on mock) include asyncio event loop contention at high concurrency (100+ concurrent users per worker). Per-request proxy logic itself is **~0.18ms** — the difference comes from how asyncio handles many simultaneous awaits on a single thread. With 4 uvicorn workers, each worker handles ~25 requests, keeping contention minimal.
+The aggregate overhead numbers (+2-4ms mean, +10–20ms P99 on mock) include asyncio event loop contention at high concurrency (100+ concurrent users per worker). Per-request proxy logic itself is **~0.13ms** with uvloop — the difference comes from how asyncio handles many simultaneous awaits on a single thread. With 4 uvicorn workers, each worker handles ~25 requests, keeping contention minimal.
 
 Real backend P99 spikes (Medium mode, ~14s) are caused by llama.cpp single-thread inference bottleneck under 20 concurrent users — not proxy overhead. Proxy adds negligible latency regardless of backend saturation.
 
