@@ -16,6 +16,7 @@ def test_keys_persist_after_restart(client):
 
     # Simulate restart: clear in-memory caches
     from smol_llm_proxy.cache import clear_key_cache, clear_route_cache, clear_alias_cache
+
     clear_key_cache()
     clear_route_cache()
     clear_alias_cache()
@@ -34,6 +35,7 @@ def test_usage_logs_persist_after_restart(client, server_with_model):
 
     # Create a user key
     from smol_llm_proxy.auth import create_api_key
+
     result = create_api_key("persist-log-user")
     user_key = result["key"]
 
@@ -94,6 +96,7 @@ def test_servers_persist_after_restart(client):
 
     # Clear route cache (simulates restart)
     from smol_llm_proxy.cache import clear_route_cache
+
     clear_route_cache()
 
     with get_db() as conn:
@@ -120,6 +123,7 @@ def test_model_assignments_persist_after_restart(client):
 
     # Clear cache (simulates restart)
     from smol_llm_proxy.cache import clear_route_cache
+
     clear_route_cache()
 
     with get_db() as conn:
