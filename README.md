@@ -5,13 +5,14 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. <1000 code lines (excluding blanks, docstrings, comments), ~53 MB RAM, ~0.2ms overhead.
+A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. In-memory rate limiting (RPM/TPM) with async SQLite flush. <=1000 code lines (excluding blanks, docstrings, comments), ~53 MB RAM, ~2–5ms mean overhead on clean conditions.
 
 Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
 
 ## Features
 
 - Per-user API keys (create / delete / toggle active)
+- RPM/TPM rate limiting with in-memory counters + async batch flush to SQLite
 - Multi-server routing by model name with in-memory cache
 - Model aliases (`alias` -> `model-name.gguf`)
 - Token usage logging: prompt/completion tokens, timings
@@ -150,11 +151,24 @@ All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
 | `/admin/keys` | `POST` | Create user key |
 | `/admin/keys/{key_id}` | `DELETE` | Revoke key (by integer id) |
 | `/admin/keys/{key_id}/toggle` | `PATCH` | Activate/deactivate key (by integer id) |
+| `/admin/keys/{key_id}/limits` | `PUT` | Set RPM/TPM rate limits for a key |
 | `/admin/aliases` | `GET` / `POST` | List or create model aliases |
 | `/admin/aliases/{alias_name}` | `DELETE` | Delete alias |
 | `/admin/usage` | `GET` | View token usage logs |
 
-**Note:** Key operations (`DELETE`, `PATCH /toggle`) use integer `key_id` from the database, not the API key string itself.
+**Note:** Key operations (`DELETE`, `PATCH /toggle`, `PUT /limits`) use integer `key_id` from the database, not the API key string itself.
+
+### Rate limits
+
+Default limits: **100 RPM**, **50,000 TPM**. Set custom limits per key:
+
+```bash
+curl -X PUT http://localhost:8000/admin/keys/1/limits \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -d '{"rpm_limit": 200, "tpm_limit": 100000}'
+```
+
+Exceeding limits returns `429 Too Many Requests` with a `Retry-After` header. The rate limiter reads from SQLite on every check (accurate across multiple workers) and commits in-memory with async batch flush — one read-only SELECT per request, no commit overhead.
 
 ## Proxy Endpoints
 
@@ -189,19 +203,19 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | 0ms | 110ms | 130ms | +20ms | 101ms | 103ms | +2ms | 49.3 | 48.4 | -0.9 |
-| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 110ms | 130ms | +20ms | 101ms | 104ms | +2ms | 194.8 | 190.9 | -3.9 |
-| High | 100+100 | 100ms | 110ms | +10ms | 110ms | 120ms | +10ms | 110ms | 120ms | +10ms | 102ms | 107ms | +5ms | 894.8 | 857.0 | -37.9 |
+| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | +0ms | 100ms | 120ms | +20ms | 101ms | 103ms | +2ms | 49.2 | 48.2 | -1.0 |
+| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 101ms | 104ms | +3ms | 194.9 | 190.7 | -4.3 |
+| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 120ms | +10ms | 102ms | 107ms | +5ms | 895.8 | 857.6 | -38.3 |
 
 ### Real llama-server backend
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 570ms | 570ms | +0ms | 940ms | 930ms | -10ms | ~1200ms | ~1100ms | ~0ms | 605ms | 604ms | -1ms | 8.2 | 8.2 | 0.0 |
-| Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~14000ms | ~14000ms | ~0ms | ~2413ms | ~2460ms | +47ms | 8.0 | 7.9 | -0.1 |
-| High | 100+100 | 12000ms | 12000ms | ~0ms | 13000ms | 13000ms | ~0ms | 13000ms | 13000ms | ~0ms | 10073ms | 10058ms | -15ms | 8.1 | 8.1 | -0.0 |
+| Low | 5+5 | 570ms | 590ms | +20ms | 920ms | 990ms | +70ms | ~1100ms | ~1100ms | ~0ms | 594ms | 623ms | +29ms | 8.4 | 8.0 | -0.4 |
+| Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2800ms | ~0ms | ~3100ms | ~3100ms | ~0ms | ~2432ms | ~2442ms | +10ms | 8.0 | 8.0 | ~0.0 |
+| High | 100+100 | 13000ms | 13000ms | ~0ms | 14000ms | 14000ms | ~0ms | 14000ms | 14000ms | ~0ms | 10423ms | 10672ms | +250ms | 7.8 | 7.8 | ~0.0 |
 
-Proxy overhead on clean conditions (mock): **~2ms** mean, **+10–20ms** P99 across all load levels with 4 uvicorn workers + uvloop. Against real backend: **negligible** — latency identical within measurement noise (~1s variance at tail).
+Proxy overhead on clean conditions (mock): **~2–5ms** mean, **+0–20ms** P99 across all load levels with DB-backed rate limiter (accurate across multiple workers). Against real backend: **negligible at low/medium load** (~10–29ms mean), high load variance driven by upstream llama.cpp contention. Negative overhead values in P95/P99 are statistical noise from parallel benchmark execution against the same upstream — clamped to ~0ms.
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint
@@ -216,7 +230,7 @@ Identical footprint against mock and real backends — the proxy forwards withou
 
 ### Caveat
 
-The aggregate overhead numbers (+2-4ms mean, +10–20ms P99 on mock) include asyncio event loop contention at high concurrency (100+ concurrent users per worker). Per-request proxy logic itself is **~0.13ms** with uvloop — the difference comes from how asyncio handles many simultaneous awaits on a single thread. With 4 uvicorn workers, each worker handles ~25 requests, keeping contention minimal.
+The aggregate overhead numbers (+2–5ms mean, +0–20ms P99 on mock) include asyncio event loop contention at high concurrency (100+ concurrent users per worker). Per-request proxy logic itself is **~0.13ms** with uvloop — the difference comes from how asyncio handles many simultaneous awaits on a single thread. With 4 uvicorn workers, each worker handles ~25 requests, keeping contention minimal.
 
 Real backend P99 spikes (Medium mode, ~14s) are caused by llama.cpp single-thread inference bottleneck under 20 concurrent users — not proxy overhead. Proxy adds negligible latency regardless of backend saturation.
 
@@ -239,6 +253,7 @@ If you self-host several llama-server instances on one or more machines and want
                         │
                         ├── in-memory cache (keys, aliases, routes) — TTL 30s
                         ├── validate API key + resolve routing (SQLite on first call, then cache)
+                        ├── rate limiter: read-only DB check + in-memory commit with async batch flush
                         ├── forward request via connection-pooled httpx client
                         └── async log tokens + timings (background worker, no blocking)
 ```

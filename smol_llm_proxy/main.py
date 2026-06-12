@@ -30,22 +30,25 @@ async def _read_json_body(request: Request) -> tuple[bytes, dict]:
 async def lifespan(app):
     init_db()
     from smol_llm_proxy.config_loader import sync_config, CONFIG_PATH
+    from smol_llm_proxy.rate_limiter import start_rate_flush
 
     print(f"DB_PATH={os.environ.get('DB_PATH')} CONFIG_PATH={CONFIG_PATH}", flush=True)
     sync_config()
+    start_rate_flush()
     yield
     from smol_llm_proxy.proxy import shutdown_httpx_client
     from smol_llm_proxy.metrics import _shutdown_async_logger
+    from smol_llm_proxy.rate_limiter import stop_rate_flush
 
     await shutdown_httpx_client()
     await _shutdown_async_logger()
+    stop_rate_flush()
 
 
 app = FastAPI(title="smol-llm-proxy", lifespan=lifespan)
 
 
 def _check_admin(authorization: str | None):
-    """Validate admin Bearer token."""
     if not authorization or not authorization.startswith("Bearer "):
         raise HTTPException(status_code=401, detail="Missing admin Authorization")
     token = authorization[7:].strip()
@@ -200,7 +203,26 @@ async def admin_toggle_key(key_id: int, request: Request, authorization: str | N
     result = toggle_api_key(key_id, active)
     if not result:
         raise HTTPException(status_code=404, detail="Key not found")
-    return result
+    return dict(result)
+
+
+@app.put("/admin/keys/{key_id}/limits")
+async def admin_set_rate_limits(key_id: int, request: Request, authorization: str | None = Header(None)):
+    _check_admin(authorization)
+    data = await request.json()
+    rpm = data.get("rpm_limit", 100)
+    tpm = data.get("tpm_limit", 50000)
+    with get_db() as conn:
+        conn.execute(
+            "UPDATE api_keys SET rpm_limit = ?, tpm_limit = ? WHERE id = ?",
+            (rpm, tpm, key_id),
+        )
+        row = conn.execute(
+            "SELECT id, name, active, rpm_limit, tpm_limit FROM api_keys WHERE id = ?", (key_id,)
+        ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Key not found")
+    return dict(row)
 
 
 @app.get("/admin/keys")

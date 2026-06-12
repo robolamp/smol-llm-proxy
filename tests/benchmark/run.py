@@ -231,7 +231,21 @@ def create_user_key(admin_key: str) -> str:
         method="POST",
     )
     with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())["key"]
+        key_data = json.loads(resp.read())
+        key_id = key_data["id"]
+
+    # Set unlimited rate limits for benchmark
+    limits_url = f"http://localhost:{PROXY_PORT}/admin/keys/{key_id}/limits"
+    limits_req = urllib.request.Request(
+        limits_url,
+        data=json.dumps({"rpm_limit": 1000000, "tpm_limit": 1000000}),
+        headers={"Authorization": f"Bearer {admin_key}", "Content-Type": "application/json"},
+        method="PUT",
+    )
+    with urllib.request.urlopen(limits_req):
+        pass
+
+    return key_data["key"]
 
 
 def run_locust(key: str, target: str, is_proxy: bool, direct_url: str, upstream_key: str, bench_model: str):
