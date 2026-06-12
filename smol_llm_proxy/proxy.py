@@ -15,15 +15,6 @@ from .metrics import enqueue_usage
 _httpx_client: httpx.AsyncClient | None = None
 
 
-def _init_rate_table():
-    """Create the rate_limits table for per-key sliding window tracking."""
-    with get_db() as conn:
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, window_start REAL NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, token_sum INTEGER NOT NULL DEFAULT 0)"
-        )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
-
-
 def get_httpx_client() -> httpx.AsyncClient:
     """Get or create the shared async HTTP client with connection pooling."""
     global _httpx_client
@@ -151,7 +142,7 @@ def _build_upstream(server, request, path):
     return target_url, upstream_headers
 
 
-def _timing_headers(timing, forward_ms, parse_ms, pre_forward_ms, proxy_overhead):
+def _timing_headers(timing, forward_ms, parse_ms, proxy_overhead):
     mapping = [
         ("X-Proxy-Body-Read", "body_read_ms"),
         ("X-Proxy-Json-Parse", "json_parse_ms"),
@@ -203,7 +194,6 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
         target_url,
         upstream_headers,
     ) = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    pre_forward_ms = (time.perf_counter() - t0) * 1000
     if body_json:
         est_tokens = _estimate_input_tokens(body_json)
         allowed, retry_after = check_rate(key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens)
@@ -238,7 +228,7 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
         content=resp_body,
         status_code=status_code,
         media_type="application/json",
-        headers=_timing_headers(timing, forward_ms, parse_ms, pre_forward_ms, proxy_overhead),
+        headers=_timing_headers(timing, forward_ms, parse_ms, proxy_overhead),
     )
 
 
@@ -269,6 +259,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
     async def generate():
         nonlocal total_prompt, total_completion, last_prompt_ms, last_predicted_ms, forward_ms, parse_ms
         t0 = time.perf_counter()
+        last_t = t0
         try:
             async for chunk in _stream_chunks(target_url, upstream_headers, body_bytes):
                 p, c, pm, pr = _parse_sse_usage(chunk)
@@ -277,7 +268,9 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                 if pm > 0 or pr > 0:
                     last_prompt_ms = pm
                     last_predicted_ms = pr
-                parse_ms += (time.perf_counter() - t0) * 1000
+                now = time.perf_counter()
+                parse_ms += (now - last_t) * 1000
+                last_t = now
                 yield chunk
         finally:
             forward_ms = (time.perf_counter() - t0) * 1000
@@ -304,7 +297,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers=_timing_headers(timing, forward_ms, parse_ms, 0.0, proxy_overhead),
+        headers=_timing_headers(timing, forward_ms, parse_ms, proxy_overhead),
     )
 
 
@@ -315,6 +308,8 @@ def _parse_sse_usage(chunk):
         if stripped.startswith("data: "):
             stripped = stripped[6:]
         if stripped == "[DONE]":
+            return 0, 0, 0.0, 0.0
+        if "timings" not in stripped and "usage" not in stripped:
             return 0, 0, 0.0, 0.0
         data = orjson.loads(stripped)
     except (orjson.JSONDecodeError, TypeError):

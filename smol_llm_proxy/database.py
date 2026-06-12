@@ -97,6 +97,17 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_usage_logs_server ON usage_logs(server_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
         """)
+        # Rate limits table (moved from proxy._init_rate_table)
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS rate_limits ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,"
+            " window_start REAL NOT NULL,"
+            " request_count INTEGER NOT NULL DEFAULT 0,"
+            " token_sum INTEGER NOT NULL DEFAULT 0)"
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_window"
+                     " ON rate_limits(key_id, window_start)")
     # Migration for existing databases: add rate limit columns if missing
     try:
         with get_db() as conn:
@@ -104,7 +115,3 @@ def init_db():
             conn.execute("ALTER TABLE api_keys ADD COLUMN tpm_limit INTEGER NOT NULL DEFAULT 50000")
     except Exception:
         pass
-
-    from .proxy import _init_rate_table
-
-    _init_rate_table()

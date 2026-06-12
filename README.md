@@ -179,7 +179,7 @@ These forward to llama-server backends based on model name routing.
 | `/v1/chat/completions` | `POST` | Chat completions (streaming + non-streaming) |
 | `/v1/completions` | `POST` | Legacy completions |
 | `/v1/embeddings` | `POST` | Embeddings |
-| `/v1/models` | `GET` | List available models (no auth required) |
+| `/v1/models` | `GET` | List available models (no auth required — fans out to all backends) |
 | `/health` | `GET` | Health check (no auth required) |
 
 ## Usage Logs
@@ -203,19 +203,19 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | +0ms | 100ms | 120ms | +20ms | 101ms | 103ms | +2ms | 49.2 | 48.2 | -1.0 |
-| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 101ms | 104ms | +3ms | 194.9 | 190.7 | -4.3 |
-| High | 100+100 | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 110ms | 120ms | +10ms | 102ms | 107ms | +5ms | 895.8 | 857.6 | -38.3 |
+| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | +0ms | 100ms | 120ms | +20ms | 101ms | 103ms | +2ms | 49.3 | 48.3 | -1.0 |
+| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 101ms | 104ms | +3ms | 194.7 | 190.7 | -4.0 |
+| High | 100+100 | 100ms | 110ms | +10ms | 110ms | 120ms | +10ms | 110ms | 140ms | +30ms | 102ms | 109ms | +7ms | 895.7 | 840.4 | -55.4 |
 
 ### Real llama-server backend
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 570ms | 590ms | +20ms | 920ms | 990ms | +70ms | ~1100ms | ~1100ms | ~0ms | 594ms | 623ms | +29ms | 8.4 | 8.0 | -0.4 |
-| Medium | 20+20 | ~2500ms | ~2500ms | ~0ms | ~2900ms | ~2800ms | ~0ms | ~3100ms | ~3100ms | ~0ms | ~2432ms | ~2442ms | +10ms | 8.0 | 8.0 | ~0.0 |
-| High | 100+100 | 13000ms | 13000ms | ~0ms | 14000ms | 14000ms | ~0ms | 14000ms | 14000ms | ~0ms | 10423ms | 10672ms | +250ms | 7.8 | 7.8 | ~0.0 |
+| Low | 5+5 | 580ms | 590ms | +10ms | ~1000ms | ~950ms | ~0ms | ~1100ms | ~1100ms | ~0ms | 623ms | 617ms | -6ms | 7.9 | 8.1 | +0.1 |
+| Medium | 20+20 | ~2300ms | ~2400ms | ~100ms | ~2700ms | ~2700ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~2302ms | ~2337ms | +35ms | 8.5 | 7.5 | -1.0 |
+| High | 100+100 | 13000ms | 13000ms | ~0ms | 14000ms | 14000ms | ~0ms | 14000ms | 14000ms | ~0ms | 10624ms | 10723ms | +98ms | 7.8 | 7.6 | -0.2 |
 
-Proxy overhead on clean conditions (mock): **~2–5ms** mean, **+0–20ms** P99 across all load levels with DB-backed rate limiter (accurate across multiple workers). Against real backend: **negligible at low/medium load** (~10–29ms mean), high load variance driven by upstream llama.cpp contention. Negative overhead values in P95/P99 are statistical noise from parallel benchmark execution against the same upstream — clamped to ~0ms.
+Proxy overhead on clean conditions (mock): **~2–7ms** mean, **+0–30ms** P99 across all load levels with DB-backed rate limiter (accurate across multiple workers). Against real backend: **negligible at low/medium load** (~6–35ms mean), high load variance driven by upstream llama.cpp contention.
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint

@@ -157,6 +157,7 @@ async def admin_create_alias(request: Request, authorization: str | None = Heade
     except Exception:
         raise HTTPException(status_code=409, detail="Alias already exists")
     clear_alias_cache()
+    clear_route_cache()
     return {"ok": True}
 
 
@@ -166,6 +167,7 @@ async def admin_delete_alias(alias_name: str, authorization: str | None = Header
     with get_db() as conn:
         conn.execute("DELETE FROM model_aliases WHERE alias_name = ?", (alias_name,))
     clear_alias_cache()
+    clear_route_cache()
     return {"ok": True}
 
 
