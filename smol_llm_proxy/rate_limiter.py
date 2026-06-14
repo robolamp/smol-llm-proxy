@@ -19,6 +19,7 @@ def _get_store(key_id):
 async def _flush_to_db():
     async with _lock:
         data = {k: dict(v) for k, v in _rate_store.items()} if _rate_store else None
+        _rate_store.clear()
     if not data:
         return
     try:
@@ -35,11 +36,13 @@ async def _flush_to_db():
                         (key_id, ws, vals["rc"], vals["ts"]),
                     )
             for key_id, windows in data.items():
+                store = _get_store(key_id)
                 for ws, vals in windows.items():
-                    store = _get_store(key_id)
                     if ws in store:
-                        store[ws]["rc"] = vals["rc"]
-                        store[ws]["ts"] = vals["ts"]
+                        store[ws]["rc"] -= vals["rc"]
+                        store[ws]["ts"] -= vals["ts"]
+                        if store[ws]["rc"] <= 0 and store[ws]["ts"] <= 0:
+                            del store[ws]
     except Exception:
         pass
 
@@ -81,9 +84,8 @@ def check_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
     # Merge DB data into in-memory store (handles commits that haven't flushed yet)
     db_rc, db_ts = (row["request_count"], row["token_sum"]) if row else (0, 0)
     mem = store.get(ws, {"rc": 0, "ts": 0})
-    store.setdefault(ws, mem)
-    effective_rc = max(db_rc, mem["rc"])
-    effective_ts = max(db_ts, mem["ts"])
+    effective_rc = db_rc + mem["rc"]
+    effective_ts = db_ts + mem["ts"]
 
     if effective_rc + 1 > rpm_limit or effective_ts + tokens_estimated > tpm_limit:
         return False, max(1, 60 - int(now - ws) + 1)
