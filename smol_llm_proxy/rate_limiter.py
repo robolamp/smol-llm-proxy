@@ -29,15 +29,18 @@ async def _flush_to_db():
             for key_id, windows in data.items():
                 for ws, vals in windows.items():
                     if vals["rc"] > 0 or vals["ts"] > 0:
-                        conn.execute(
-                            "INSERT INTO rate_limits (key_id, window_start,"
-                            " request_count, token_sum)"
-                            " VALUES (?, ?, ?, ?)"
-                            " ON CONFLICT(key_id, window_start) DO UPDATE SET"
-                            "  request_count = request_count + excluded.request_count,"
-                            "  token_sum     = token_sum     + excluded.token_sum",
-                            (key_id, ws, vals["rc"], vals["ts"]),
-                        )
+                        try:
+                            conn.execute(
+                                "INSERT INTO rate_limits (key_id, window_start,"
+                                " request_count, token_sum)"
+                                " VALUES (?, ?, ?, ?)"
+                                " ON CONFLICT(key_id, window_start) DO UPDATE SET"
+                                "  request_count = request_count + excluded.request_count,"
+                                "  token_sum     = token_sum     + excluded.token_sum",
+                                (key_id, ws, vals["rc"], vals["ts"]),
+                            )
+                        except Exception:
+                            pass
             conn.execute(
                 "DELETE FROM rate_limits WHERE window_start < ?",
                 (_time.time() - 65.0,),

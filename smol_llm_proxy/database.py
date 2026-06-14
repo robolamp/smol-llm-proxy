@@ -96,11 +96,20 @@ def init_db():
             " request_count INTEGER NOT NULL DEFAULT 0,"
             " token_sum INTEGER NOT NULL DEFAULT 0)"
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start)"
+        )
     # Migration for existing databases: add rate limit columns if missing
     try:
         with get_db() as conn:
             conn.execute("ALTER TABLE api_keys ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 100")
             conn.execute("ALTER TABLE api_keys ADD COLUMN tpm_limit INTEGER NOT NULL DEFAULT 50000")
+    except Exception:
+        pass
+    # Migrate rate_limits index to UNIQUE for UPSERT support
+    try:
+        with get_db() as conn:
+            conn.execute("DROP INDEX IF EXISTS idx_rate_limits_key_window")
+            conn.execute("CREATE UNIQUE INDEX idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
     except Exception:
         pass
