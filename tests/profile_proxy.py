@@ -31,19 +31,17 @@ with get_db() as conn:
 
 # Create a server + model
 with get_db() as conn:
-    cursor = conn.execute(
-        "INSERT INTO servers (name, url) VALUES (?, ?)", ("profile-srv", "http://localhost:9999")
-    )
+    cursor = conn.execute("INSERT INTO servers (name, url) VALUES (?, ?)", ("profile-srv", "http://localhost:9999"))
     server_id = cursor.lastrowid
-    conn.execute(
-        "INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (server_id, "test.gguf")
-    )
+    conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (server_id, "test.gguf"))
+
 
 def make_request(body_json=None):
     """Create a fake Starlette Request."""
     if body_json is None:
         body_json = {"model": "test.gguf", "messages": [{"role": "user", "content": "hello world"}]}
     import orjson
+
     body_bytes = orjson.dumps(body_json)
 
     headers = Headers(raw=[(b"authorization", f"Bearer {result['key']}".encode())])
@@ -69,7 +67,11 @@ def make_request(body_json=None):
 def run_single():
     """Run one proxy context build + rate check (no upstream)."""
     request = make_request()
-    _build_proxy_context(request, "/v1/chat/completions", body_json={"model": "test.gguf", "messages": [{"role": "user", "content": "hello world"}]})
+    _build_proxy_context(
+        request,
+        "/v1/chat/completions",
+        body_json={"model": "test.gguf", "messages": [{"role": "user", "content": "hello world"}]},
+    )
     check_rate(result["id"], 1000000, 1000000, 5)
     commit_rate(result["id"], 8)
 

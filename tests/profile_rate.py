@@ -20,9 +20,11 @@ result = create_api_key("profile-test")
 with __import__("sqlite3").connect(os.environ["DB_PATH"]) as conn:
     conn.execute("UPDATE api_keys SET rpm_limit = 1000000, tpm_limit = 1000000 WHERE id = ?", (result["id"],))
 
+
 def run_single():
     check_rate(result["id"], 1000000, 1000000, 5)
     commit_rate(result["id"], 8)
+
 
 def run_batch(n=2000):
     pr = cProfile.Profile()
@@ -34,6 +36,7 @@ def run_batch(n=2000):
     ps = pstats.Stats(pr, stream=s).sort_stats("cumulative")
     ps.print_stats(20)
     print(s.getvalue())
+
 
 if __name__ == "__main__":
     n = int(sys.argv[1]) if len(sys.argv) > 1 else 2000

@@ -18,31 +18,32 @@ def _get_store(key_id):
 
 async def _flush_to_db():
     async with _lock:
-        data = {k: dict(v) for k, v in _rate_store.items()} if _rate_store else None
+        if not _rate_store:
+            return
+        data = {k: dict(v) for k, v in _rate_store.items()}
+        store_refs = list(_rate_store.values())
         _rate_store.clear()
-    if not data:
-        return
+
     try:
         with get_db() as conn:
             for key_id, windows in data.items():
                 for ws, vals in windows.items():
-                    conn.execute(
-                        "INSERT INTO rate_limits (key_id, window_start,"
-                        " request_count, token_sum)"
-                        " VALUES (?, ?, ?, ?)"
-                        " ON CONFLICT(key_id, window_start) DO UPDATE SET"
-                        "  request_count = request_count + excluded.request_count,"
-                        "  token_sum     = token_sum     + excluded.token_sum",
-                        (key_id, ws, vals["rc"], vals["ts"]),
-                    )
-            for key_id, windows in data.items():
-                store = _get_store(key_id)
-                for ws, vals in windows.items():
-                    if ws in store:
-                        store[ws]["rc"] -= vals["rc"]
-                        store[ws]["ts"] -= vals["ts"]
-                        if store[ws]["rc"] <= 0 and store[ws]["ts"] <= 0:
-                            del store[ws]
+                    if vals["rc"] > 0 or vals["ts"] > 0:
+                        conn.execute(
+                            "INSERT INTO rate_limits (key_id, window_start,"
+                            " request_count, token_sum)"
+                            " VALUES (?, ?, ?, ?)"
+                            " ON CONFLICT(key_id, window_start) DO UPDATE SET"
+                            "  request_count = request_count + excluded.request_count,"
+                            "  token_sum     = token_sum     + excluded.token_sum",
+                            (key_id, ws, vals["rc"], vals["ts"]),
+                        )
+            conn.execute(
+                "DELETE FROM rate_limits WHERE window_start < ?",
+                (_time.time() - 65.0,),
+            )
+        for windows in store_refs:
+            windows.clear()
     except Exception:
         pass
 
@@ -72,8 +73,7 @@ def check_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
     ws = int(now)
     db = _get_connection(get_db_path())
     row = db.execute(
-        "SELECT request_count, token_sum FROM rate_limits WHERE key_id = ?"
-        " AND window_start = ?",
+        "SELECT request_count, token_sum FROM rate_limits WHERE key_id = ? AND window_start = ?",
         (key_id, ws),
     ).fetchone()
 

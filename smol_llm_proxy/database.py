@@ -45,16 +45,6 @@ def reset_db_connection():
         _thread_local.conn = None
 
 
-def validate_key(key_hash: str) -> dict | None:
-    """Check if a key is valid and active. Returns key info or None."""
-    with get_db() as conn:
-        row = conn.execute(
-            "SELECT id, name FROM api_keys WHERE key_hash = ? AND active = 1 LIMIT 1",
-            (key_hash,),
-        ).fetchone()
-    return dict(row) if row else None
-
-
 def resolve_routing(key_id: int, model_name: str) -> dict | None:
     """Resolve alias + find server for a given key. Returns server info or None."""
     cache_key = f"{key_id}:{model_name}"
@@ -106,8 +96,7 @@ def init_db():
             " request_count INTEGER NOT NULL DEFAULT 0,"
             " token_sum INTEGER NOT NULL DEFAULT 0)"
         )
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_window"
-                     " ON rate_limits(key_id, window_start)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
     # Migration for existing databases: add rate limit columns if missing
     try:
         with get_db() as conn:
