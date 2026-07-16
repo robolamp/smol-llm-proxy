@@ -1,5 +1,6 @@
 """Proxy logic: route by model name and forward to llama-server."""
 
+import asyncio
 import httpx
 import orjson
 import time
@@ -41,13 +42,17 @@ def _extract_user_key(authorization):
     return authorization[7:].strip()
 
 
+def _resolve_alias_sync(model_name):
+    with get_db() as conn:
+        return conn.execute("SELECT real_model_name FROM model_aliases WHERE alias_name = ?", (model_name,)).fetchone()
+
+
 async def _resolve_model(model_name):
     """Resolve an alias to its real model name, using cache when possible."""
     cached = get_cached_alias(model_name)
     if cached:
         return model_name, cached
-    with get_db() as conn:
-        row = conn.execute("SELECT real_model_name FROM model_aliases WHERE alias_name = ?", (model_name,)).fetchone()
+    row = await asyncio.to_thread(_resolve_alias_sync, model_name)
     if row:
         set_cached_alias(model_name, row["real_model_name"])
         return model_name, row["real_model_name"]
@@ -92,6 +97,31 @@ def _estimate_input_tokens(body_json):
     return max(1, total_chars // 4)
 
 
+async def _check_rate_limit(key_info, body_json):
+    """Check rate limit for a request. Returns 429 response or None."""
+    if not body_json:
+        return None
+    est_tokens = _estimate_input_tokens(body_json)
+    allowed, retry_after = await asyncio.to_thread(
+        check_rate, key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens
+    )
+    if not allowed:
+        return _rate_limit_response(retry_after)
+    return None
+
+
+def _proxy_overhead(timing, extra_ms=0.0):
+    return (
+        timing["body_read_ms"]
+        + timing["json_parse_ms"]
+        + timing["auth_ms"]
+        + timing["route_ms"]
+        + timing["alias_ms"]
+        + timing["serialize_ms"]
+        + extra_ms
+    )
+
+
 async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None):
     t0 = time.perf_counter()
     user_key = _extract_user_key(request.headers.get("authorization"))
@@ -99,22 +129,17 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
     if body_bytes is None:
         body_bytes = await request.body()
-    body_read_ms = (time.perf_counter() - t0) * 1000
     if body_json is None:
         try:
             body_json = orjson.loads(body_bytes)
         except orjson.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
-    json_parse_ms = (time.perf_counter() - t0) * 1000
     model_name = body_json.get("model", "")
     key_info = _find_key_info(user_key)
-    auth_ms = (time.perf_counter() - t0) * 1000
     if not key_info or not key_info.get("active"):
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-    routing = resolve_routing(key_info["id"], model_name)
-    route_ms = (time.perf_counter() - t0) * 1000
+    routing = await asyncio.to_thread(resolve_routing, key_info["id"], model_name)
     display_name, real_model_name = await _resolve_model(model_name)
-    alias_ms = (time.perf_counter() - t0) * 1000
     serialize_ms = 0.0
     if display_name != real_model_name:
         body_json["model"] = real_model_name
@@ -122,15 +147,7 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
         serialize_ms = (time.perf_counter() - t0) * 1000
     if not routing:
         raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
-    timing = {
-        "body_read_ms": body_read_ms,
-        "json_parse_ms": json_parse_ms,
-        "auth_ms": auth_ms,
-        "route_ms": route_ms,
-        "alias_ms": alias_ms,
-        "serialize_ms": serialize_ms,
-    }
-    return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes, serialize_ms
 
 
 def _build_upstream(server, request, path):
@@ -152,24 +169,27 @@ def _timing_headers(timing, forward_ms, parse_ms, proxy_overhead):
         ("X-Proxy-Serialize-Time", "serialize_ms"),
     ]
     headers = {k: f"{timing[v]:.2f}ms" for k, v in mapping}
-    headers.update(
-        {
-            "X-Proxy-Forward-Time": f"{forward_ms:.2f}ms",
-            "X-Proxy-Parse-Time": f"{parse_ms:.2f}ms",
-            "X-Proxy-Total-Overhead": f"{proxy_overhead:.2f}ms",
-        }
-    )
+    headers["X-Proxy-Forward-Time"] = f"{forward_ms:.2f}ms"
+    headers["X-Proxy-Parse-Time"] = f"{parse_ms:.2f}ms"
+    headers["X-Proxy-Total-Overhead"] = f"{proxy_overhead:.2f}ms"
     return headers
 
 
 async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
-    """Build the full proxy context: auth, routing, alias resolution, and upstream URL."""
-    key_info, routing, display_name, real_model_name, _, body_bytes, timing = await _build_proxy_context(
+    key_info, routing, display_name, real_model_name, body_json, body_bytes, serialize_ms = await _build_proxy_context(
         request, path, body_bytes=body_bytes, body_json=body_json
     )
     server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
     target_url, upstream_headers = _build_upstream(server, request, path)
-    return key_info, routing, display_name, real_model_name, body_bytes, timing, target_url, upstream_headers
+    timing = {
+        "body_read_ms": 0,
+        "json_parse_ms": 0,
+        "auth_ms": 0,
+        "route_ms": 0,
+        "alias_ms": 0,
+        "serialize_ms": serialize_ms,
+    }
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing, target_url, upstream_headers
 
 
 def _rate_limit_response(retry_after):
@@ -183,22 +203,20 @@ def _rate_limit_response(retry_after):
 
 async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None):
     """Handle a non-streaming chat completion request through the proxy."""
-    t0 = time.perf_counter()
     (
         key_info,
         routing,
         display_name,
         real_model_name,
+        body_json,
         body_bytes,
         timing,
         target_url,
         upstream_headers,
     ) = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    if body_json:
-        est_tokens = _estimate_input_tokens(body_json)
-        allowed, retry_after = check_rate(key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens)
-        if not allowed:
-            return _rate_limit_response(retry_after)
+    rate_resp = await _check_rate_limit(key_info, body_json)
+    if rate_resp:
+        return rate_resp
     t0 = time.perf_counter()
     status_code, resp_body = await _forward_request(target_url, upstream_headers, body_bytes, request.method)
     forward_ms = (time.perf_counter() - t0) * 1000
@@ -215,20 +233,11 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
         prompt_ms,
         predicted_ms,
     )
-    proxy_overhead = (
-        timing["body_read_ms"]
-        + timing["json_parse_ms"]
-        + timing["auth_ms"]
-        + timing["route_ms"]
-        + timing["alias_ms"]
-        + timing["serialize_ms"]
-        + parse_ms
-    )
     return Response(
         content=resp_body,
         status_code=status_code,
         media_type="application/json",
-        headers=_timing_headers(timing, forward_ms, parse_ms, proxy_overhead),
+        headers=_timing_headers(timing, forward_ms, parse_ms, _proxy_overhead(timing, parse_ms)),
     )
 
 
@@ -239,27 +248,27 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
         routing,
         display_name,
         real_model_name,
+        body_json,
         body_bytes,
         timing,
         target_url,
         upstream_headers,
     ) = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    if body_json:
-        est_tokens = _estimate_input_tokens(body_json)
-        allowed, retry_after = check_rate(key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens)
-        if not allowed:
-            return _rate_limit_response(retry_after)
+    rate_resp = await _check_rate_limit(key_info, body_json)
+    if rate_resp:
+        return rate_resp
     total_prompt = 0
     total_completion = 0
     last_prompt_ms = 0.0
     last_predicted_ms = 0.0
-    forward_ms = 0.0
-    parse_ms = 0.0
+    st = {"forward_ms": 0.0, "parse_ms": 0.0}
 
     async def generate():
-        nonlocal total_prompt, total_completion, last_prompt_ms, last_predicted_ms, forward_ms, parse_ms
+        nonlocal total_prompt, total_completion, last_prompt_ms, last_predicted_ms
         t0 = time.perf_counter()
         last_t = t0
+        fw_ms = 0.0
+        pr_ms = 0.0
         try:
             async for chunk in _stream_chunks(target_url, upstream_headers, body_bytes):
                 p, c, pm, pr = _parse_sse_usage(chunk)
@@ -269,11 +278,13 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                     last_prompt_ms = pm
                     last_predicted_ms = pr
                 now = time.perf_counter()
-                parse_ms += (now - last_t) * 1000
+                pr_ms += (now - last_t) * 1000
                 last_t = now
                 yield chunk
         finally:
-            forward_ms = (time.perf_counter() - t0) * 1000
+            fw_ms = (time.perf_counter() - t0) * 1000
+            st["forward_ms"] = fw_ms
+            st["parse_ms"] = pr_ms
             commit_rate(key_info["id"], total_prompt + total_completion)
             enqueue_usage(
                 key_info["id"],
@@ -285,19 +296,21 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                 last_prompt_ms,
                 last_predicted_ms,
             )
+            timing_json = orjson.dumps(
+                {
+                    "type": "timing",
+                    "forward_ms": fw_ms,
+                    "parse_ms": pr_ms,
+                    "total_prompt_tokens": total_prompt,
+                    "total_completion_tokens": total_completion,
+                }
+            )
+            yield f"\n\ndata: {timing_json}\n\n"
 
-    proxy_overhead = (
-        timing["body_read_ms"]
-        + timing["json_parse_ms"]
-        + timing["auth_ms"]
-        + timing["route_ms"]
-        + timing["alias_ms"]
-        + timing["serialize_ms"]
-    )
     return StreamingResponse(
         generate(),
         media_type="text/event-stream",
-        headers=_timing_headers(timing, forward_ms, parse_ms, proxy_overhead),
+        headers=_timing_headers(timing, st["forward_ms"], st["parse_ms"], _proxy_overhead(timing)),
     )
 
 
@@ -329,8 +342,11 @@ async def _stream_chunks(target_url, headers, body):
     """Stream response chunks from the upstream server."""
     client = get_httpx_client()
     async with client.stream("POST", target_url, headers=headers, content=body) as resp:
-        async for chunk in resp.aiter_bytes():
-            yield chunk.decode("utf-8")
+        try:
+            async for chunk in resp.aiter_bytes():
+                yield chunk.decode("utf-8")
+        except UnicodeDecodeError:
+            print("stream chunk decode error", flush=True)
 
 
 async def proxy_public(body=b"", path="/v1/models"):

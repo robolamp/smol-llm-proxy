@@ -10,18 +10,11 @@ _lock = asyncio.Lock()
 _flush_task: asyncio.Task | None = None
 
 
-def _get_store(key_id):
-    if key_id not in _rate_store:
-        _rate_store[key_id] = {}
-    return _rate_store[key_id]
-
-
 async def _flush_to_db():
     async with _lock:
         if not _rate_store:
             return
         data = {k: dict(v) for k, v in _rate_store.items()}
-        store_refs = list(_rate_store.values())
         _rate_store.clear()
 
     try:
@@ -39,16 +32,17 @@ async def _flush_to_db():
                                 "  token_sum     = token_sum     + excluded.token_sum",
                                 (key_id, ws, vals["rc"], vals["ts"]),
                             )
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            print(f"rate flush upsert failed (key={key_id}): {e}", flush=True)
             conn.execute(
                 "DELETE FROM rate_limits WHERE window_start < ?",
                 (_time.time() - 65.0,),
             )
-        for windows in store_refs:
-            windows.clear()
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"rate flush failed: {e}", flush=True)
+        async with _lock:
+            for k, v in data.items():
+                _rate_store[k] = v
 
 
 async def _flush_loop():
@@ -80,11 +74,9 @@ def check_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
         (key_id, ws),
     ).fetchone()
 
-    store = _get_store(key_id)
-    # Clean expired windows
+    store = _rate_store.setdefault(key_id, {})
     for w in [x for x in store if x <= now - 60.0]:
         del store[w]
-    # Merge DB data into in-memory store (handles commits that haven't flushed yet)
     db_rc, db_ts = (row["request_count"], row["token_sum"]) if row else (0, 0)
     mem = store.get(ws, {"rc": 0, "ts": 0})
     effective_rc = db_rc + mem["rc"]
@@ -98,7 +90,7 @@ def check_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
 def commit_rate(key_id, tokens_actual):
     """In-memory increment — flushed to DB by background task."""
     ws = int(_time.time())
-    store = _get_store(key_id)
+    store = _rate_store.setdefault(key_id, {})
     if ws not in store:
         store[ws] = {"rc": 0, "ts": 0}
     store[ws]["rc"] += 1

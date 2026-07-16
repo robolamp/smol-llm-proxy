@@ -23,43 +23,31 @@ def sync_config():
     aliases = cfg.get("aliases", {})
 
     with get_db() as conn:
-        # --- Servers ---
         for srv in servers:
-            name = srv["name"]
-            url = srv["url"]
+            if not isinstance(srv, dict):
+                continue
+            name, url = srv.get("name"), srv.get("url")
+            if not name or not url:
+                continue
             api_key = srv.get("api_key", "")
-
             existing = conn.execute("SELECT id FROM servers WHERE name = ?", (name,)).fetchone()
-
             if existing:
+                conn.execute("UPDATE servers SET url = ?, api_key = ? WHERE id = ?", (url, api_key, existing["id"]))
                 server_id = existing["id"]
-                # Update URL/api_key if changed
-                conn.execute(
-                    "UPDATE servers SET url = ?, api_key = ? WHERE id = ?",
-                    (url, api_key, server_id),
-                )
             else:
-                cursor = conn.execute(
-                    "INSERT INTO servers (name, url, api_key) VALUES (?, ?, ?)",
-                    (name, url, api_key),
-                )
-                server_id = cursor.lastrowid
-
-            # --- Models for this server ---
+                server_id = conn.execute(
+                    "INSERT INTO servers (name, url, api_key) VALUES (?, ?, ?)", (name, url, api_key)
+                ).lastrowid
             for model_name in srv.get("models", []):
                 conn.execute(
-                    """INSERT INTO server_models (server_id, model_name)
-                       SELECT ?, ? WHERE NOT EXISTS (
-                           SELECT 1 FROM server_models WHERE server_id = ? AND model_name = ?)""",
+                    "INSERT INTO server_models (server_id, model_name) SELECT ?, ? WHERE NOT EXISTS ("
+                    " SELECT 1 FROM server_models WHERE server_id = ? AND model_name = ?)",
                     (server_id, model_name, server_id, model_name),
                 )
-
-        # --- Aliases ---
         for alias_name, real_model in aliases.items():
             conn.execute(
-                """INSERT INTO model_aliases (alias_name, real_model_name)
-                   SELECT ?, ? WHERE NOT EXISTS (
-                       SELECT 1 FROM model_aliases WHERE alias_name = ?)""",
+                "INSERT INTO model_aliases (alias_name, real_model_name) SELECT ?, ? WHERE NOT EXISTS ("
+                " SELECT 1 FROM model_aliases WHERE alias_name = ?)",
                 (alias_name, real_model, alias_name),
             )
 

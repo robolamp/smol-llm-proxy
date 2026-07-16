@@ -4,7 +4,7 @@ import time
 from typing import Optional
 
 _key_cache: dict[str, dict] = {}
-_alias_cache: dict[str, str] = {}
+_alias_cache: dict[str, tuple[str, float]] = {}
 _route_cache: dict[str, dict] = {}
 
 TTL = 30
@@ -31,11 +31,14 @@ def clear_key_cache():
 def get_cached_alias(alias_name: str) -> Optional[str]:
     if _bench_cold:
         return None
-    return _alias_cache.get(alias_name)
+    entry = _alias_cache.get(alias_name)
+    if entry and entry[1] > time.time() - TTL:
+        return entry[0]
+    return None
 
 
 def set_cached_alias(alias_name: str, real_model_name: str):
-    _alias_cache[alias_name] = real_model_name
+    _alias_cache[alias_name] = (real_model_name, time.time())
 
 
 def clear_alias_cache():

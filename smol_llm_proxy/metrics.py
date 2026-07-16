@@ -3,7 +3,7 @@
 import asyncio
 from .database import get_db
 
-_usage_queue: asyncio.Queue = None
+_usage_queue: asyncio.Queue | None = None
 _logger_task: asyncio.Task = None
 _INSERT_SQL = "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, prompt_ms, predicted_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
@@ -62,30 +62,28 @@ def enqueue_usage(
 ):
     if _usage_queue is None:
         _init_async_logger()
-    _usage_queue.put_nowait(
-        {
-            "key_id": key_id,
-            "server_id": server_id,
-            "model_name": model_name,
-            "real_model_name": real_model_name,
-            "prompt_tokens": prompt_tokens,
-            "completion_tokens": completion_tokens,
-            "prompt_ms": prompt_ms,
-            "predicted_ms": predicted_ms,
-        }
-    )
+    try:
+        _usage_queue.put_nowait(
+            {
+                "key_id": key_id,
+                "server_id": server_id,
+                "model_name": model_name,
+                "real_model_name": real_model_name,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "prompt_ms": prompt_ms,
+                "predicted_ms": predicted_ms,
+            }
+        )
+    except asyncio.QueueFull:
+        print("usage queue full, dropping log entry", flush=True)
 
 
 async def _shutdown_async_logger():
     global _logger_task
     if _usage_queue is None:
         return
-    batch = []
-    try:
-        while True:
-            batch.append(_usage_queue.get_nowait())
-    except asyncio.QueueEmpty:
-        pass
+    batch = _drain_queue()
     if batch:
         _flush_batch(batch)
     if _logger_task and not _logger_task.done():
@@ -99,14 +97,19 @@ async def _shutdown_async_logger():
 def flush_usage_logs():
     if _usage_queue is None:
         return
+    batch = _drain_queue()
+    if batch:
+        _flush_batch(batch)
+
+
+def _drain_queue():
     batch = []
     try:
         while True:
             batch.append(_usage_queue.get_nowait())
     except asyncio.QueueEmpty:
         pass
-    if batch:
-        _flush_batch(batch)
+    return batch
 
 
 def _build_where(filters, table_prefix=""):

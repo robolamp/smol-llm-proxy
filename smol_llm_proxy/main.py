@@ -97,10 +97,12 @@ async def admin_update_server(server_id: int, request: Request, authorization: s
     data = await request.json()
     fields = []
     params = []
+    allowed_fields = {"url", "api_key", "active"}
     for key in ("url", "api_key", "active"):
-        if key in data:
-            fields.append(f"{key} = ?")
-            params.append(data[key] if key != "active" else int(data[key]))
+        if key not in data or key not in allowed_fields:
+            continue
+        fields.append(f"{key} = ?")
+        params.append(int(data[key]) if key == "active" else data[key])
     params.append(server_id)
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
@@ -261,25 +263,24 @@ async def admin_get_usage(
 
 @app.post("/v1/chat/completions")
 async def proxy_chat_completions(request: Request):
-    return await _proxy_completions(request, "v1/chat/completions")
+    body_bytes, data = await _read_json_body(request)
+    if data.get("stream", False):
+        return await proxy_streaming(request, "v1/chat/completions", body_bytes=body_bytes, body_json=data)
+    return await proxy_non_streaming(request, "v1/chat/completions", body_bytes=body_bytes, body_json=data)
 
 
 @app.post("/v1/completions")
 async def proxy_completions(request: Request):
-    return await _proxy_completions(request, "v1/completions")
-
-
-async def _proxy_completions(request: Request, path: str):
     body_bytes, data = await _read_json_body(request)
-    is_streaming = data.get("stream", False)
-    if is_streaming:
-        return await proxy_streaming(request, path, body_bytes=body_bytes, body_json=data)
-    return await proxy_non_streaming(request, path, body_bytes=body_bytes, body_json=data)
+    if data.get("stream", False):
+        return await proxy_streaming(request, "v1/completions", body_bytes=body_bytes, body_json=data)
+    return await proxy_non_streaming(request, "v1/completions", body_bytes=body_bytes, body_json=data)
 
 
 @app.post("/v1/embeddings")
 async def proxy_embeddings(request: Request):
-    return await proxy_non_streaming(request, "v1/embeddings")
+    body_bytes, body_json = await _read_json_body(request)
+    return await proxy_non_streaming(request, "v1/embeddings", body_bytes=body_bytes, body_json=body_json)
 
 
 @app.get("/v1/models")
@@ -296,6 +297,7 @@ async def health():
             servers = conn.execute("SELECT COUNT(*) as cnt FROM servers WHERE active = 1").fetchone()["cnt"]
         return {"status": "ok", "active_servers": servers}
     except Exception:
+        print("health check failed", flush=True)
         return Response(content='{"status":"error"}', media_type="application/json", status_code=503)
 
 

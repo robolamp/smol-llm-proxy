@@ -86,19 +86,9 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_usage_logs_key ON usage_logs(key_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_server ON usage_logs(server_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
+            CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, window_start REAL NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, token_sum INTEGER NOT NULL DEFAULT 0);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start);
         """)
-        # Rate limits table (moved from proxy._init_rate_table)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS rate_limits ("
-            "id INTEGER PRIMARY KEY AUTOINCREMENT,"
-            " key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE,"
-            " window_start REAL NOT NULL,"
-            " request_count INTEGER NOT NULL DEFAULT 0,"
-            " token_sum INTEGER NOT NULL DEFAULT 0)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start)"
-        )
     # Migration for existing databases: add rate limit columns if missing
     try:
         with get_db() as conn:
@@ -106,10 +96,19 @@ def init_db():
             conn.execute("ALTER TABLE api_keys ADD COLUMN tpm_limit INTEGER NOT NULL DEFAULT 50000")
     except Exception:
         pass
-    # Migrate rate_limits index to UNIQUE for UPSERT support
+    # Migrate rate_limits index to UNIQUE for UPSERT support.
+    # Old DBs may hold duplicate (key_id, window_start) rows from the
+    # INSERT OR REPLACE path; CREATE UNIQUE INDEX fails on them. The table
+    # only holds rolling rate windows, so clearing it before rebuild is safe.
     try:
         with get_db() as conn:
-            conn.execute("DROP INDEX IF EXISTS idx_rate_limits_key_window")
-            conn.execute("CREATE UNIQUE INDEX idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
-    except Exception:
-        pass
+            already_unique = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index'"
+                " AND name='idx_rate_limits_key_window' AND sql LIKE '%UNIQUE%'"
+            ).fetchone()
+            if not already_unique:
+                conn.execute("DROP INDEX IF EXISTS idx_rate_limits_key_window")
+                conn.execute("DELETE FROM rate_limits")
+                conn.execute("CREATE UNIQUE INDEX idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
+    except Exception as e:
+        print(f"rate_limits index migration failed: {e}", flush=True)
