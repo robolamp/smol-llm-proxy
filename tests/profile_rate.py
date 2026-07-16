@@ -6,6 +6,7 @@ import pstats
 import io
 import os
 import sys
+import time as _time
 
 sys.path.insert(0, "/workspace/smol-llm-proxy")
 os.environ["ADMIN_KEY"] = "Fdczv9kefrH2BctYxhToOWvEaBREkR7YfOaH3GIwFcE"
@@ -13,7 +14,7 @@ os.environ["DB_PATH"] = "/tmp/profile_proxy.db"
 
 from smol_llm_proxy.database import init_db, reset_db_connection
 from smol_llm_proxy.auth import create_api_key
-from smol_llm_proxy.proxy import check_rate, commit_rate
+from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate
 
 init_db()
 result = create_api_key("profile-test")
@@ -22,8 +23,9 @@ with __import__("sqlite3").connect(os.environ["DB_PATH"]) as conn:
 
 
 def run_single():
-    check_rate(result["id"], 1000000, 1000000, 5)
-    commit_rate(result["id"], 8)
+    ws = int(_time.time())
+    reserve_rate(result["id"], 1000000, 1000000, 5)
+    reconcile_rate(result["id"], 8, ws, 5)
 
 
 def run_batch(n=2000):

@@ -76,13 +76,13 @@ def init_db():
     with get_db() as conn:
         conn.executescript("""
             CREATE TABLE IF NOT EXISTS servers (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE NOT NULL, url TEXT NOT NULL, api_key TEXT DEFAULT '', active INTEGER NOT NULL DEFAULT 1);
-            CREATE TABLE IF NOT EXISTS server_models (id INTEGER PRIMARY KEY AUTOINCREMENT, server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE, model_name TEXT NOT NULL, UNIQUE(server_id, model_name));
+            CREATE TABLE IF NOT EXISTS server_models (id INTEGER PRIMARY KEY AUTOINCREMENT, server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE, model_name TEXT NOT NULL, UNIQUE(model_name));
             CREATE INDEX IF NOT EXISTS idx_server_models_model ON server_models(model_name);
             CREATE TABLE IF NOT EXISTS model_aliases (id INTEGER PRIMARY KEY AUTOINCREMENT, alias_name TEXT UNIQUE NOT NULL, real_model_name TEXT NOT NULL);
             CREATE INDEX IF NOT EXISTS idx_model_aliases_alias ON model_aliases(alias_name);
             CREATE TABLE IF NOT EXISTS api_keys (id INTEGER PRIMARY KEY AUTOINCREMENT, key_hash TEXT UNIQUE NOT NULL, name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, rpm_limit INTEGER NOT NULL DEFAULT 100, tpm_limit INTEGER NOT NULL DEFAULT 50000, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
-            CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, server_id INTEGER NOT NULL REFERENCES servers(id) ON DELETE CASCADE, model_name TEXT NOT NULL, real_model_name TEXT NOT NULL DEFAULT '', prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0, prompt_ms REAL DEFAULT 0, predicted_ms REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+            CREATE TABLE IF NOT EXISTS usage_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER REFERENCES api_keys(id) ON DELETE SET NULL, server_id REFERENCES servers(id) ON DELETE SET NULL, model_name TEXT NOT NULL, real_model_name TEXT NOT NULL DEFAULT '', prompt_tokens INTEGER NOT NULL DEFAULT 0, completion_tokens INTEGER NOT NULL DEFAULT 0, total_tokens INTEGER NOT NULL DEFAULT 0, prompt_ms REAL DEFAULT 0, predicted_ms REAL DEFAULT 0, created_at DATETIME DEFAULT CURRENT_TIMESTAMP);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_key ON usage_logs(key_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_server ON usage_logs(server_id);
             CREATE INDEX IF NOT EXISTS idx_usage_logs_created ON usage_logs(created_at);
@@ -97,9 +97,6 @@ def init_db():
     except Exception:
         pass
     # Migrate rate_limits index to UNIQUE for UPSERT support.
-    # Old DBs may hold duplicate (key_id, window_start) rows from the
-    # INSERT OR REPLACE path; CREATE UNIQUE INDEX fails on them. The table
-    # only holds rolling rate windows, so clearing it before rebuild is safe.
     try:
         with get_db() as conn:
             already_unique = conn.execute(
@@ -112,3 +109,25 @@ def init_db():
                 conn.execute("CREATE UNIQUE INDEX idx_rate_limits_key_window ON rate_limits(key_id, window_start)")
     except Exception as e:
         print(f"rate_limits index migration failed: {e}", flush=True)
+    # Migration: UNIQUE(server_id, model_name) → UNIQUE(model_name)
+    try:
+        with get_db() as conn:
+            old_unique = conn.execute(
+                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_server_models_model'"
+            ).fetchone()
+            if old_unique and "UNIQUE" in old_unique["sql"]:
+                # Has duplicates — clean them: keep max(id) per model_name
+                conn.execute(
+                    "DELETE FROM server_models WHERE id NOT IN ("
+                    "  SELECT MAX(id) FROM server_models GROUP BY model_name)"
+                )
+                dupes = conn.execute(
+                    "SELECT model_name, COUNT(*) as cnt FROM server_models GROUP BY model_name HAVING cnt > 1"
+                ).fetchall()
+                for row in dupes:
+                    print(f"migration: model '{row['model_name']}' was on {row['cnt']} servers, kept last", flush=True)
+                conn.execute("DROP INDEX IF EXISTS idx_server_models_model")
+                conn.execute("CREATE UNIQUE INDEX idx_server_models_model ON server_models(model_name)")
+                print("migration: server_models UNIQUE(model_name) applied", flush=True)
+    except Exception as e:
+        print(f"server_models migration failed: {e}", flush=True)

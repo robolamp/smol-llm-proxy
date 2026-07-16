@@ -11,6 +11,8 @@ from pathlib import Path
 import httpx
 import pytest
 
+pytestmark = pytest.mark.real_proxy
+
 
 ADMIN_KEY = "test-admin-key"
 PROXY_PORT = None

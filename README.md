@@ -5,7 +5,7 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. In-memory rate limiting (RPM/TPM) with async SQLite flush. <=1000 code lines (excluding blanks, docstrings, comments), ~53 MB RAM, ~2–5ms mean overhead on clean conditions.
+A small API proxy for self-hosted llama.cpp setups. Routes across multiple llama-server instances, per-user API keys, token usage tracking. In-memory rate limiting (RPM/TPM) with async SQLite flush. <=1100 code lines (excluding blanks, docstrings, comments), ~53 MB RAM, ~2–5ms mean overhead on clean conditions.
 
 Built for the case where you run multiple llama-server instances (different models, different GPUs) and want to share them across users with token tracking. Not a replacement for LiteLLM or llama-swap — see comparison below.
 
@@ -153,8 +153,10 @@ All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
 | `/admin/keys/{key_id}/toggle` | `PATCH` | Activate/deactivate key (by integer id) |
 | `/admin/keys/{key_id}/limits` | `PUT` | Set RPM/TPM rate limits for a key |
 | `/admin/aliases` | `GET` / `POST` | List or create model aliases |
-| `/admin/aliases/{alias_name}` | `DELETE` | Delete alias |
+| `/admin/aliases/{alias_name}` | `PATCH` / `DELETE` | Update alias target / Delete alias |
 | `/admin/usage` | `GET` | View token usage logs |
+| `/admin/usage/summary` | `GET` | Usage summary grouped by alias (model_name) |
+| `/admin/usage/summary/real` | `GET` | Usage summary grouped by real model name + server |
 
 **Note:** Key operations (`DELETE`, `PATCH /toggle`, `PUT /limits`) use integer `key_id` from the database, not the API key string itself.
 
@@ -168,7 +170,60 @@ curl -X PUT http://localhost:8000/admin/keys/1/limits \
   -d '{"rpm_limit": 200, "tpm_limit": 100000}'
 ```
 
-Exceeding limits returns `429 Too Many Requests` with a `Retry-After` header. The rate limiter reads from SQLite on every check (accurate across multiple workers) and commits in-memory with async batch flush — one read-only SELECT per request, no commit overhead.
+Exceeding limits returns `429 Too Many Requests` with a `Retry-After` header. The rate limiter reads from SQLite + in-memory counters on every check and commits in-memory with async batch flush — one read-only SELECT per request, no commit overhead. **Note:** rate counters and caches are process-local; under `--workers N` each worker maintains independent counters (limits multiply by N).
+
+### Model assignment
+
+Each model can be assigned to **exactly one server** at a time. Assigning a model that is already on another server returns `409 Conflict`:
+
+```bash
+curl -X POST http://localhost:8000/admin/servers/2/models \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -d '{"model_name": "qwen3-30b-a3b-instruct.gguf"}'
+# 409: Model 'qwen3-30b-a3b-instruct.gguf' already assigned to server 'server-a' (id=1). Use ?reassign=true to move.
+```
+
+Move a model to a different server with `?reassign=true`:
+
+```bash
+curl -X POST "http://localhost:8000/admin/servers/2/models?reassign=true" \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -d '{"model_name": "qwen3-30b-a3b-instruct.gguf"}'
+```
+
+Multiple aliases can point to the same model. Aliases can be switched to a different model via `PATCH`:
+
+```bash
+curl -X PATCH http://localhost:8000/admin/aliases/fast \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"real_model_name": "new-model.gguf"}'
+```
+
+### Usage
+
+View raw usage logs:
+
+```bash
+curl "http://localhost:8000/admin/usage?key_id=1&start_date=2024-01-01T00:00:00&end_date=2024-01-31T23:59:59" \
+  -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+Usage summary grouped by alias (what the client called):
+
+```bash
+curl "http://localhost:8000/admin/usage/summary?key_id=1&start_date=2024-01-01T00:00:00&end_date=2024-01-31T23:59:59" \
+  -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+Usage summary grouped by real model name + server (aggregates across all aliases):
+
+```bash
+curl "http://localhost:8000/admin/usage/summary/real?key_id=1&start_date=2024-01-01T00:00:00&end_date=2024-01-31T23:59:59" \
+  -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+All three endpoints accept: `key_id`, `server_id`, `start_date` (ISO 8601), `end_date` (ISO 8601), `limit`, `offset`. Usage logs are preserved even after a server or key is deleted.
 
 ## Proxy Endpoints
 
@@ -215,7 +270,7 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 | Medium | 20+20 | ~2300ms | ~2400ms | ~100ms | ~2700ms | ~2700ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~2302ms | ~2337ms | +35ms | 8.5 | 7.5 | -1.0 |
 | High | 100+100 | 13000ms | 13000ms | ~0ms | 14000ms | 14000ms | ~0ms | 14000ms | 14000ms | ~0ms | 10624ms | 10723ms | +98ms | 7.8 | 7.6 | -0.2 |
 
-Proxy overhead on clean conditions (mock): **~2–7ms** mean, **+0–30ms** P99 across all load levels with DB-backed rate limiter (accurate across multiple workers). Against real backend: **negligible at low/medium load** (~6–35ms mean), high load variance driven by upstream llama.cpp contention.
+Proxy overhead on clean conditions (mock): **~2–7ms** mean, **+0–30ms** P99 across all load levels with DB-backed rate limiter. Against real backend: **negligible at low/medium load** (~6–35ms mean), high load variance driven by upstream llama.cpp contention.
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint
@@ -253,7 +308,7 @@ If you self-host several llama-server instances on one or more machines and want
                         │
                         ├── in-memory cache (keys, aliases, routes) — TTL 30s
                         ├── validate API key + resolve routing (SQLite on first call, then cache)
-                        ├── rate limiter: read-only DB check + in-memory commit with async batch flush
+                        ├── rate limiter: read-only DB check + in-memory reservation with async batch flush (single-worker)
                         ├── forward request via connection-pooled httpx client
                         └── async log tokens + timings (background worker, no blocking)
 ```

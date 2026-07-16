@@ -35,7 +35,7 @@ keywords = ["proxy", "llama.cpp", "llm", "api-key", "routing"]
 "GitHub" = "https://github.com/robolamp/smol-llm-proxy"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "ruff>=0.6.0"]
+dev = ["pytest>=8.0", "pytest-rerunfailures>=14.0", "ruff>=0.6.0"]
 bench = ["locust>=2.31.0"]
 
 [project.scripts]
@@ -50,3 +50,8 @@ smol_llm_proxy = [".env.example", "config.example.yaml", "entrypoint.sh"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+
+[tool.pytest.ini_options]
+markers = [
+    "real_proxy: real uvicorn integration tests (slow, require network)",
+]

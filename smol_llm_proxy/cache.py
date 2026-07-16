@@ -3,12 +3,11 @@
 import time
 from typing import Optional
 
+TTL = 30
+_bench_cold = False
 _key_cache: dict[str, dict] = {}
 _alias_cache: dict[str, tuple[str, float]] = {}
 _route_cache: dict[str, dict] = {}
-
-TTL = 30
-_bench_cold = False
 
 
 def get_cached_key(key_hash: str) -> Optional[dict]:

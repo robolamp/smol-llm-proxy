@@ -70,9 +70,12 @@ class TestProxyForwarding:
     def test_502_on_connect_error(self, server_with_model, admin_key, client):
         from httpx import ConnectError
 
+        mock_client = Mock()
+        mock_client.request = AsyncMock(side_effect=ConnectError("refused"))
+
         with patch(
             "smol_llm_proxy.proxy.get_httpx_client",
-            new=Mock(return_value=AsyncMock(request=AsyncMock(side_effect=ConnectError("refused")))),
+            new=Mock(return_value=mock_client),
         ):
             resp = client.post(
                 "/v1/chat/completions",
@@ -139,6 +142,46 @@ class TestAliasResolution:
         assert last["real_model_name"] == server_with_model["model_name"]
 
 
+class TestForwardRequestMethod:
+    def test_forward_request_uses_correct_method(self):
+        """_forward_request must pass the method parameter to httpx, not hardcode POST."""
+        import asyncio
+
+        mock_client = Mock()
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.content = b'{"data":[]}'
+        mock_client.request = AsyncMock(return_value=mock_resp)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            from smol_llm_proxy.proxy import _forward_request
+
+            asyncio.run(_forward_request("http://localhost:8080/v1/models", {}, b"", "GET"))
+
+        mock_client.request.assert_called_once()
+        call_kwargs = mock_client.request.call_args
+        assert call_kwargs.kwargs["method"] == "GET"
+
+    def test_forward_request_post_method(self):
+        """_forward_request passes POST method correctly."""
+        import asyncio
+
+        mock_client = Mock()
+        mock_resp = Mock()
+        mock_resp.status_code = 200
+        mock_resp.content = b'{"id":"test"}'
+        mock_client.request = AsyncMock(return_value=mock_resp)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            from smol_llm_proxy.proxy import _forward_request
+
+            asyncio.run(_forward_request("http://localhost:8080/v1/chat", {}, b'{"model":"m"}', "POST"))
+
+        mock_client.request.assert_called_once()
+        call_kwargs = mock_client.request.call_args
+        assert call_kwargs.kwargs["method"] == "POST"
+
+
 class TestProxyHelpers:
     def test_extract_key(self):
         from smol_llm_proxy.proxy import _extract_user_key
@@ -171,3 +214,52 @@ class TestProxyHelpers:
         from smol_llm_proxy.proxy import _parse_sse_usage
 
         assert _parse_sse_usage("[DONE]") == (0, 0, 0.0, 0.0)
+
+
+class TestTimingHeaders:
+    def test_overhead_is_sum_of_disjoint_segments(self):
+        from smol_llm_proxy.proxy import _proxy_overhead
+
+        timing = {
+            "body_read_ms": 1.2,
+            "json_parse_ms": 0.8,
+            "auth_ms": 3.5,
+            "route_ms": 2.1,
+            "serialize_ms": 0.5,
+        }
+        overhead = _proxy_overhead(timing)
+        expected = (
+            timing["body_read_ms"]
+            + timing["json_parse_ms"]
+            + timing["auth_ms"]
+            + timing["route_ms"]
+            + timing["serialize_ms"]
+        )
+        assert abs(overhead - expected) < 0.001
+
+    def test_no_duplicate_segment_headers(self):
+        from smol_llm_proxy.proxy import _timing_headers
+
+        timing = {
+            "body_read_ms": 1.2,
+            "json_parse_ms": 0.8,
+            "auth_ms": 3.5,
+            "route_ms": 2.1,
+            "serialize_ms": 0.5,
+        }
+        headers = _timing_headers(timing, 10.0, 15.0, 7.6)
+        segment_values = [
+            headers["X-Proxy-Body-Read"],
+            headers["X-Proxy-Json-Parse"],
+            headers["X-Proxy-Auth-Time"],
+            headers["X-Proxy-Route-Time"],
+            headers["X-Proxy-Serialize-Time"],
+        ]
+        assert len(segment_values) == len(set(segment_values)), f"Duplicate segment headers: {segment_values}"
+
+    def test_no_alias_ms_header(self):
+        from smol_llm_proxy.proxy import _timing_headers
+
+        timing = {"body_read_ms": 1.0, "json_parse_ms": 0.5, "auth_ms": 2.0, "route_ms": 1.5, "serialize_ms": 0.3}
+        headers = _timing_headers(timing, 10.0, 15.0, 5.3)
+        assert "X-Proxy-Alias-Time" not in headers

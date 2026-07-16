@@ -6,11 +6,11 @@ import orjson
 import time
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, Response, JSONResponse
-from .config import HTTPX_TIMEOUT
+from .config import HTTPX_TIMEOUT, PROXY_MAX_CONNECTIONS, PROXY_MAX_KEEPALIVE, PROXY_KEEPALIVE_EXPIRY
 from .database import get_db, resolve_routing
-from .auth import _find_key_info
-from .cache import get_cached_alias, set_cached_alias
-from .rate_limiter import check_rate, commit_rate
+from .auth import _hash_key, _find_key_info_sync
+from .cache import get_cached_key
+from .rate_limiter import reserve_rate, reconcile_rate
 from .metrics import enqueue_usage
 
 _httpx_client: httpx.AsyncClient | None = None
@@ -22,7 +22,11 @@ def get_httpx_client() -> httpx.AsyncClient:
     if _httpx_client is None or _httpx_client.is_closed:
         _httpx_client = httpx.AsyncClient(
             timeout=HTTPX_TIMEOUT,
-            limits=httpx.Limits(max_connections=50, max_keepalive_connections=20, keepalive_expiry=30.0),
+            limits=httpx.Limits(
+                max_connections=PROXY_MAX_CONNECTIONS,
+                max_keepalive_connections=PROXY_MAX_KEEPALIVE,
+                keepalive_expiry=PROXY_KEEPALIVE_EXPIRY,
+            ),
         )
     return _httpx_client
 
@@ -42,38 +46,18 @@ def _extract_user_key(authorization):
     return authorization[7:].strip()
 
 
-def _resolve_alias_sync(model_name):
-    with get_db() as conn:
-        return conn.execute("SELECT real_model_name FROM model_aliases WHERE alias_name = ?", (model_name,)).fetchone()
-
-
-async def _resolve_model(model_name):
-    """Resolve an alias to its real model name, using cache when possible."""
-    cached = get_cached_alias(model_name)
-    if cached:
-        return model_name, cached
-    row = await asyncio.to_thread(_resolve_alias_sync, model_name)
-    if row:
-        set_cached_alias(model_name, row["real_model_name"])
-        return model_name, row["real_model_name"]
-    return model_name, model_name
-
-
 def _format_server_url(server_url, path):
     """Join a server URL and API path."""
     return f"{server_url.rstrip('/')}/{path.lstrip('/')}"
 
 
 async def _forward_request(target_url, headers, body, method):
-    """Forward an HTTP request to the upstream llama-server."""
     client = get_httpx_client()
     try:
         resp = await client.request(method=method, url=target_url, headers=headers, content=body)
         return resp.status_code, resp.content
-    except httpx.ConnectError:
-        raise HTTPException(status_code=502, detail=f"Cannot connect to server at {target_url}")
-    except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Server request timed out")
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=504 if isinstance(e, httpx.TimeoutException) else 502, detail=str(e))
 
 
 def _parse_usage_from_body(body_bytes):
@@ -90,106 +74,127 @@ def _parse_usage_from_body(body_bytes):
 
 
 def _estimate_input_tokens(body_json):
-    """Estimate input token count from message characters (chars / 4)."""
-    total_chars = sum(
-        len(m.get("content", "")) for m in body_json.get("messages", []) if isinstance(m.get("content"), str)
-    )
-    return max(1, total_chars // 4)
+    if "messages" in body_json:
+        text = sum(len(m.get("content", "")) for m in body_json["messages"] if isinstance(m.get("content"), str))
+    elif "prompt" in body_json:
+        p = body_json["prompt"]
+        text = len(p) if isinstance(p, str) else sum(len(x) for x in p if isinstance(x, str))
+    elif "input" in body_json:
+        inp = body_json["input"]
+        text = len(inp) if isinstance(inp, str) else sum(len(x) for x in inp if isinstance(x, str))
+    else:
+        text = 0
+    return max(1, text // 4)
 
 
 async def _check_rate_limit(key_info, body_json):
     """Check rate limit for a request. Returns 429 response or None."""
     if not body_json:
-        return None
+        return None, None
     est_tokens = _estimate_input_tokens(body_json)
-    allowed, retry_after = await asyncio.to_thread(
-        check_rate, key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens
+    allowed, retry_after, ws = await asyncio.to_thread(
+        reserve_rate, key_info["id"], key_info["rpm_limit"], key_info["tpm_limit"], est_tokens
     )
     if not allowed:
-        return _rate_limit_response(retry_after)
-    return None
+        return _rate_limit_response(retry_after), None
+    return None, ws
 
 
-def _proxy_overhead(timing, extra_ms=0.0):
-    return (
-        timing["body_read_ms"]
-        + timing["json_parse_ms"]
-        + timing["auth_ms"]
-        + timing["route_ms"]
-        + timing["alias_ms"]
-        + timing["serialize_ms"]
-        + extra_ms
-    )
+def _proxy_overhead(timing):
+    return sum(timing.get(k, 0) for k in ("body_read_ms", "json_parse_ms", "auth_ms", "route_ms", "serialize_ms"))
 
 
 async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None):
-    t0 = time.perf_counter()
-    user_key = _extract_user_key(request.headers.get("authorization"))
-    if not user_key:
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    if body_bytes is None:
-        body_bytes = await request.body()
-    if body_json is None:
-        try:
-            body_json = orjson.loads(body_bytes)
-        except orjson.JSONDecodeError:
-            raise HTTPException(status_code=400, detail="Invalid JSON body")
-    model_name = body_json.get("model", "")
-    key_info = _find_key_info(user_key)
-    if not key_info or not key_info.get("active"):
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-    routing = await asyncio.to_thread(resolve_routing, key_info["id"], model_name)
-    display_name, real_model_name = await _resolve_model(model_name)
-    serialize_ms = 0.0
-    if display_name != real_model_name:
-        body_json["model"] = real_model_name
-        body_bytes = orjson.dumps(body_json)
-        serialize_ms = (time.perf_counter() - t0) * 1000
-    if not routing:
-        raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
-    return key_info, routing, display_name, real_model_name, body_json, body_bytes, serialize_ms
-
-
-def _build_upstream(server, request, path):
-    """Build the target URL and upstream headers for forwarding."""
-    target_url = _format_server_url(server["url"], path)
-    upstream_headers = {k: v for k, v in request.headers.items() if k.lower() not in ("host", "authorization")}
-    if server.get("api_key"):
-        upstream_headers["authorization"] = f"Bearer {server['api_key']}"
-    return target_url, upstream_headers
-
-
-def _timing_headers(timing, forward_ms, parse_ms, proxy_overhead):
-    mapping = [
-        ("X-Proxy-Body-Read", "body_read_ms"),
-        ("X-Proxy-Json-Parse", "json_parse_ms"),
-        ("X-Proxy-Auth-Time", "auth_ms"),
-        ("X-Proxy-Route-Time", "route_ms"),
-        ("X-Proxy-Alias-Time", "alias_ms"),
-        ("X-Proxy-Serialize-Time", "serialize_ms"),
-    ]
-    headers = {k: f"{timing[v]:.2f}ms" for k, v in mapping}
-    headers["X-Proxy-Forward-Time"] = f"{forward_ms:.2f}ms"
-    headers["X-Proxy-Parse-Time"] = f"{parse_ms:.2f}ms"
-    headers["X-Proxy-Total-Overhead"] = f"{proxy_overhead:.2f}ms"
-    return headers
-
-
-async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
-    key_info, routing, display_name, real_model_name, body_json, body_bytes, serialize_ms = await _build_proxy_context(
-        request, path, body_bytes=body_bytes, body_json=body_json
-    )
-    server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
-    target_url, upstream_headers = _build_upstream(server, request, path)
     timing = {
         "body_read_ms": 0,
         "json_parse_ms": 0,
         "auth_ms": 0,
         "route_ms": 0,
-        "alias_ms": 0,
-        "serialize_ms": serialize_ms,
+        "serialize_ms": 0,
     }
+    user_key = _extract_user_key(request.headers.get("authorization"))
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    t = time.perf_counter()
+    if body_bytes is None:
+        body_bytes = await request.body()
+    timing["body_read_ms"] = (time.perf_counter() - t) * 1000
+    t = time.perf_counter()
+    if body_json is None:
+        try:
+            body_json = orjson.loads(body_bytes)
+        except orjson.JSONDecodeError:
+            raise HTTPException(status_code=400, detail="Invalid JSON body")
+    timing["json_parse_ms"] = (time.perf_counter() - t) * 1000
+    model_name = body_json.get("model", "")
+    key_hash = _hash_key(user_key)
+    t = time.perf_counter()
+    cached_key = get_cached_key(key_hash)
+    if cached_key:
+        key_info = cached_key
+    else:
+        key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
+    timing["auth_ms"] = (time.perf_counter() - t) * 1000
+    if not key_info or not key_info.get("active"):
+        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+    t = time.perf_counter()
+    routing = await asyncio.to_thread(resolve_routing, key_info["id"], model_name)
+    timing["route_ms"] = (time.perf_counter() - t) * 1000
+    real_model_name = routing["real_model"] if routing else model_name
+    display_name = model_name
+    if display_name != real_model_name:
+        body_json["model"] = real_model_name
+        t = time.perf_counter()
+        body_bytes = orjson.dumps(body_json)
+        timing["serialize_ms"] = (time.perf_counter() - t) * 1000
+    if not routing:
+        raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing
+
+
+_HOP_BY_HOP = frozenset(
+    ("host", "authorization", "content-length", "transfer-encoding", "connection", "keep-alive", "te", "upgrade")
+)
+
+
+def _build_upstream(server, request, path):
+    """Build the target URL and upstream headers for forwarding."""
+    target_url = _format_server_url(server["url"], path)
+    upstream_headers = {k: v for k, v in request.headers.items() if k.lower() not in _HOP_BY_HOP}
+    if server.get("api_key"):
+        upstream_headers["authorization"] = f"Bearer {server['api_key']}"
+    return target_url, upstream_headers
+
+
+def _timing_headers(t, fm, pm, po):
+    return {
+        "X-Proxy-Body-Read": f"{t['body_read_ms']:.2f}ms",
+        "X-Proxy-Json-Parse": f"{t['json_parse_ms']:.2f}ms",
+        "X-Proxy-Auth-Time": f"{t['auth_ms']:.2f}ms",
+        "X-Proxy-Route-Time": f"{t['route_ms']:.2f}ms",
+        "X-Proxy-Serialize-Time": f"{t['serialize_ms']:.2f}ms",
+        "X-Proxy-Forward-Time": f"{fm:.2f}ms",
+        "X-Proxy-Parse-Time": f"{pm:.2f}ms",
+        "X-Proxy-Total-Overhead": f"{po:.2f}ms",
+    }
+
+
+async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
+    key_info, routing, display_name, real_model_name, body_json, body_bytes, timing = await _build_proxy_context(
+        request, path, body_bytes=body_bytes, body_json=body_json
+    )
+    server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
+    target_url, upstream_headers = _build_upstream(server, request, path)
     return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing, target_url, upstream_headers
+
+
+async def _check_and_setup(request, path, *, body_bytes=None, body_json=None):
+    result = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
+    ki, rt, dn, rm, bj, bb, tm, tu, uh = result
+    rr, aw = await _check_rate_limit(ki, bj)
+    if rr:
+        return rr
+    return result + (aw,)
 
 
 def _rate_limit_response(retry_after):
@@ -202,167 +207,125 @@ def _rate_limit_response(retry_after):
 
 
 async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None):
-    """Handle a non-streaming chat completion request through the proxy."""
-    (
-        key_info,
-        routing,
-        display_name,
-        real_model_name,
-        body_json,
-        body_bytes,
-        timing,
-        target_url,
-        upstream_headers,
-    ) = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    rate_resp = await _check_rate_limit(key_info, body_json)
-    if rate_resp:
-        return rate_resp
+    result = await _check_and_setup(request, path, body_bytes=body_bytes, body_json=body_json)
+    if isinstance(result, JSONResponse):
+        return result
+    ki, rt, dn, rm, bj, bb, tm, tu, uh, aw = result
     t0 = time.perf_counter()
-    status_code, resp_body = await _forward_request(target_url, upstream_headers, body_bytes, request.method)
-    forward_ms = (time.perf_counter() - t0) * 1000
-    prompt_tokens, completion_tokens, prompt_ms, predicted_ms = _parse_usage_from_body(resp_body)
-    parse_ms = (time.perf_counter() - t0) * 1000
-    commit_rate(key_info["id"], prompt_tokens + completion_tokens)
-    enqueue_usage(
-        key_info["id"],
-        routing["server_id"],
-        display_name,
-        real_model_name,
-        prompt_tokens,
-        completion_tokens,
-        prompt_ms,
-        predicted_ms,
-    )
+    sc, rb = await _forward_request(tu, uh, bb, request.method)
+    fm = (time.perf_counter() - t0) * 1000
+    pt, ct, pm, pr = _parse_usage_from_body(rb)
+    pms = (time.perf_counter() - t0) * 1000
+    et = _estimate_input_tokens(bj)
+    reconcile_rate(ki["id"], pt + ct, aw, et)
+    enqueue_usage(ki["id"], rt["server_id"], dn, rm, pt, ct, pm, pr)
     return Response(
-        content=resp_body,
-        status_code=status_code,
-        media_type="application/json",
-        headers=_timing_headers(timing, forward_ms, parse_ms, _proxy_overhead(timing, parse_ms)),
+        **{
+            "content": rb,
+            "status_code": sc,
+            "media_type": "application/json",
+            "headers": _timing_headers(tm, fm, pms, _proxy_overhead(tm)),
+        }
     )
 
 
 async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
-    """Handle a streaming chat completion request through the proxy."""
-    (
-        key_info,
-        routing,
-        display_name,
-        real_model_name,
-        body_json,
-        body_bytes,
-        timing,
-        target_url,
-        upstream_headers,
-    ) = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    rate_resp = await _check_rate_limit(key_info, body_json)
-    if rate_resp:
-        return rate_resp
-    total_prompt = 0
-    total_completion = 0
-    last_prompt_ms = 0.0
-    last_predicted_ms = 0.0
-    st = {"forward_ms": 0.0, "parse_ms": 0.0}
+    result = await _check_and_setup(request, path, body_bytes=body_bytes, body_json=body_json)
+    if isinstance(result, JSONResponse):
+        return result
+    ki, rt, dn, rm, bj, bb, tm, tu, uh, aw = result
+    tp = tc = 0
+    lpm = lpr = 0.0
+    et = _estimate_input_tokens(bj)
+    client = get_httpx_client()
+    request_obj = client.build_request("POST", tu, headers=uh, content=bb)
+    try:
+        resp = await client.send(request_obj, stream=True)
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=504 if isinstance(e, httpx.TimeoutException) else 502, detail=str(e))
+    if resp.status_code != 200:
+        bb = await resp.aread()
+        await resp.aclose()
+        return Response(bb, resp.status_code, media_type="application/json")
 
     async def generate():
-        nonlocal total_prompt, total_completion, last_prompt_ms, last_predicted_ms
-        t0 = time.perf_counter()
-        last_t = t0
-        fw_ms = 0.0
-        pr_ms = 0.0
-        try:
-            async for chunk in _stream_chunks(target_url, upstream_headers, body_bytes):
-                p, c, pm, pr = _parse_sse_usage(chunk)
-                total_prompt += p
-                total_completion += c
-                if pm > 0 or pr > 0:
-                    last_prompt_ms = pm
-                    last_predicted_ms = pr
-                now = time.perf_counter()
-                pr_ms += (now - last_t) * 1000
-                last_t = now
-                yield chunk
-        finally:
-            fw_ms = (time.perf_counter() - t0) * 1000
-            st["forward_ms"] = fw_ms
-            st["parse_ms"] = pr_ms
-            commit_rate(key_info["id"], total_prompt + total_completion)
-            enqueue_usage(
-                key_info["id"],
-                routing["server_id"],
-                display_name,
-                real_model_name,
-                total_prompt,
-                total_completion,
-                last_prompt_ms,
-                last_predicted_ms,
-            )
-            timing_json = orjson.dumps(
-                {
-                    "type": "timing",
-                    "forward_ms": fw_ms,
-                    "parse_ms": pr_ms,
-                    "total_prompt_tokens": total_prompt,
-                    "total_completion_tokens": total_completion,
-                }
-            )
-            yield f"\n\ndata: {timing_json}\n\n"
-
-    return StreamingResponse(
-        generate(),
-        media_type="text/event-stream",
-        headers=_timing_headers(timing, st["forward_ms"], st["parse_ms"], _proxy_overhead(timing)),
-    )
-
-
-def _parse_sse_usage(chunk):
-    """Extract token counts and timing from an SSE chunk."""
-    try:
-        stripped = chunk.strip()
-        if stripped.startswith("data: "):
-            stripped = stripped[6:]
-        if stripped == "[DONE]":
-            return 0, 0, 0.0, 0.0
-        if "timings" not in stripped and "usage" not in stripped:
-            return 0, 0, 0.0, 0.0
-        data = orjson.loads(stripped)
-    except (orjson.JSONDecodeError, TypeError):
-        return 0, 0, 0.0, 0.0
-    timings = data.get("timings", {}) if isinstance(data, dict) else {}
-    if timings and isinstance(timings, dict):
-        pn, cn = timings.get("prompt_n", 0) or 0, timings.get("predicted_n", 0) or 0
-        if pn > 0 or cn > 0:
-            return pn, cn, timings.get("prompt_ms", 0.0) or 0.0, timings.get("predicted_ms", 0.0) or 0.0
-    usage = data.get("usage", {}) if isinstance(data, dict) else {}
-    if isinstance(usage, dict):
-        return usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0), 0.0, 0.0
-    return 0, 0, 0.0, 0.0
-
-
-async def _stream_chunks(target_url, headers, body):
-    """Stream response chunks from the upstream server."""
-    client = get_httpx_client()
-    async with client.stream("POST", target_url, headers=headers, content=body) as resp:
+        nonlocal tp, tc, lpm, lpr
         try:
             async for chunk in resp.aiter_bytes():
-                yield chunk.decode("utf-8")
-        except UnicodeDecodeError:
-            print("stream chunk decode error", flush=True)
+                if not chunk:
+                    continue
+                try:
+                    text = chunk.decode("utf-8")
+                    p, c, pm, pr = _parse_sse_usage(text)
+                except (UnicodeDecodeError, TypeError):
+                    p, c, pm, pr = 0, 0, 0.0, 0.0
+                if p > 0 or c > 0:
+                    tp = p
+                    tc = c
+                if pm > 0 or pr > 0:
+                    lpm = pm
+                    lpr = pr
+                yield chunk
+        finally:
+            await resp.aclose()
+            reconcile_rate(ki["id"], tp + tc, aw, et)
+            enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr)
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _parse_sse_usage(text):
+    """Extract token counts and timing from an SSE text chunk."""
+    total_p = total_c = 0
+    last_pm = last_pr = 0.0
+    try:
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("data: "):
+                line = line[6:]
+            if line == "[DONE]" or ("timings" not in line and "usage" not in line):
+                continue
+            try:
+                data = orjson.loads(line)
+            except (orjson.JSONDecodeError, TypeError):
+                continue
+            timings = data.get("timings", {}) if isinstance(data, dict) else {}
+            if timings and isinstance(timings, dict):
+                pn = timings.get("prompt_n", 0) or 0
+                cn = timings.get("predicted_n", 0) or 0
+                if pn > 0 or cn > 0:
+                    total_p += pn
+                    total_c += cn
+                    last_pm = timings.get("prompt_ms", 0.0) or 0.0
+                    last_pr = timings.get("predicted_ms", 0.0) or 0.0
+            usage = data.get("usage", {}) if isinstance(data, dict) else {}
+            if isinstance(usage, dict):
+                total_p += usage.get("prompt_tokens", 0)
+                total_c += usage.get("completion_tokens", 0)
+    except (UnicodeDecodeError, TypeError):
+        pass
+    return total_p, total_c, last_pm, last_pr
 
 
 async def proxy_public(body=b"", path="/v1/models"):
-    """Public endpoint: fetch models from all active backends without auth."""
     with get_db() as conn:
         rows = conn.execute("SELECT url, id FROM servers WHERE active = 1").fetchall()
     if not rows:
         raise HTTPException(status_code=503, detail="No active llama-server configured")
-    all_models = []
-    for row in rows:
-        target_url = _format_server_url(row["url"], path)
+
+    async def _fetch(row):
         try:
-            status_code, resp_body = await _forward_request(target_url, {}, body, "GET")
-            data = orjson.loads(resp_body)
+            _, rb = await _forward_request(_format_server_url(row["url"], path), {}, body, "GET")
+            data = orjson.loads(rb)
             if "data" in data:
-                all_models.extend(data["data"])
+                return data["data"]
         except Exception:
-            continue
-    return JSONResponse(content={"object": "list", "data": all_models}, status_code=200)
+            pass
+        return []
+
+    results = await asyncio.gather(*(_fetch(row) for row in rows), return_exceptions=True)
+    return JSONResponse(
+        content={"object": "list", "data": [m for r in results if isinstance(r, list) for m in r]}, status_code=200
+    )

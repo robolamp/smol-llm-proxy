@@ -1,48 +1,71 @@
-"""Sliding-window rate limiter: DB read + in-memory commit with UPSERT flush."""
+"""Sliding-window rate limiter: admission-time reservation + DB flush."""
 
 import asyncio
+import threading
 import time as _time
 
 from .database import _get_connection, get_db, get_db_path
 
 _rate_store: dict = {}
+_pending: list = []
 _lock = asyncio.Lock()
 _flush_task: asyncio.Task | None = None
+_thread_lock = threading.Lock()
+WINDOW_SECONDS = 60
+_RATE_LIMITS_SQL = "SELECT COALESCE(SUM(request_count), 0) as rc, COALESCE(SUM(token_sum), 0) as ts FROM rate_limits WHERE key_id = ? AND window_start > ?"
 
 
-async def _flush_to_db():
-    async with _lock:
-        if not _rate_store:
-            return
-        data = {k: dict(v) for k, v in _rate_store.items()}
-        _rate_store.clear()
-
+def _flush_to_db_sync(data, pending=None):
+    """Flush rate store snapshot and pending deltas to DB. Must NOT be called under _thread_lock."""
+    upsert_sql = (
+        "INSERT INTO rate_limits (key_id, window_start,"
+        " request_count, token_sum)"
+        " VALUES (?, ?, ?, ?)"
+        " ON CONFLICT(key_id, window_start) DO UPDATE SET"
+        "  request_count = request_count + excluded.request_count,"
+        "  token_sum     = token_sum     + excluded.token_sum"
+    )
     try:
         with get_db() as conn:
             for key_id, windows in data.items():
                 for ws, vals in windows.items():
                     if vals["rc"] > 0 or vals["ts"] > 0:
                         try:
-                            conn.execute(
-                                "INSERT INTO rate_limits (key_id, window_start,"
-                                " request_count, token_sum)"
-                                " VALUES (?, ?, ?, ?)"
-                                " ON CONFLICT(key_id, window_start) DO UPDATE SET"
-                                "  request_count = request_count + excluded.request_count,"
-                                "  token_sum     = token_sum     + excluded.token_sum",
-                                (key_id, ws, vals["rc"], vals["ts"]),
-                            )
+                            conn.execute(upsert_sql, (key_id, ws, vals["rc"], vals["ts"]))
                         except Exception as e:
                             print(f"rate flush upsert failed (key={key_id}): {e}", flush=True)
+            if pending:
+                for key_id, ws, rc_delta, ts_delta in pending:
+                    try:
+                        conn.execute(upsert_sql, (key_id, ws, rc_delta, ts_delta))
+                    except Exception as e:
+                        print(f"rate flush pending failed (key={key_id}): {e}", flush=True)
             conn.execute(
                 "DELETE FROM rate_limits WHERE window_start < ?",
                 (_time.time() - 65.0,),
             )
     except Exception as e:
         print(f"rate flush failed: {e}", flush=True)
-        async with _lock:
-            for k, v in data.items():
-                _rate_store[k] = v
+        return False
+    return True
+
+
+async def _flush_to_db():
+    async with _lock:
+        with _thread_lock:
+            data = {k: dict(v) for k, v in _rate_store.items()}
+            pending = list(_pending)
+            _rate_store.clear()
+            _pending.clear()
+        success = await asyncio.to_thread(_flush_to_db_sync, data, pending)
+        if not success:
+            with _thread_lock:
+                for k, v in data.items():
+                    store = _rate_store.setdefault(k, {})
+                    for ws, vals in v.items():
+                        bucket = store.setdefault(ws, {"rc": 0, "ts": 0})
+                        bucket["rc"] += vals["rc"]
+                        bucket["ts"] += vals["ts"]
 
 
 async def _flush_loop():
@@ -64,34 +87,51 @@ def stop_rate_flush():
         _flush_task = None
 
 
-def check_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
-    """Read DB baseline + merge in-memory store for per-key sliding window."""
+def _window_totals(key_id, window_start):
+    with _thread_lock:
+        mem_rc, mem_ts = 0, 0
+        store = _rate_store.get(key_id)
+        if store:
+            stale = [k for k, v in store.items() if k <= window_start]
+            for k in stale:
+                del store[k]
+            for ws, vals in store.items():
+                if ws > window_start:
+                    mem_rc += vals["rc"]
+                    mem_ts += vals["ts"]
+    db = _get_connection(get_db_path())
+    row = db.execute(_RATE_LIMITS_SQL, (key_id, window_start)).fetchone()
+    return row["rc"] + mem_rc, row["ts"] + mem_ts
+
+
+def reserve_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
+    """Check rate limit and reserve quota under one lock. Returns (allowed, retry_after, ws)."""
     now = _time.time()
     ws = int(now)
-    db = _get_connection(get_db_path())
-    row = db.execute(
-        "SELECT request_count, token_sum FROM rate_limits WHERE key_id = ? AND window_start = ?",
-        (key_id, ws),
-    ).fetchone()
+    window_start = now - WINDOW_SECONDS
+    with _thread_lock:
+        store = _rate_store.setdefault(key_id, {})
+        bucket = store.setdefault(ws, {"rc": 0, "ts": 0})
+        stale = [k for k in store if k <= window_start]
+        for k in stale:
+            del store[k]
+        db = _get_connection(get_db_path())
+        row = db.execute(_RATE_LIMITS_SQL, (key_id, window_start)).fetchone()
+        effective_rc = row["rc"] + sum(v["rc"] for v in store.values())
+        effective_ts = row["ts"] + sum(v["ts"] for v in store.values())
+        if effective_rc + 1 > rpm_limit or effective_ts + tokens_estimated > tpm_limit:
+            return False, WINDOW_SECONDS, ws
+        bucket["rc"] += 1
+        bucket["ts"] += tokens_estimated
+        return True, 0, ws
 
-    store = _rate_store.setdefault(key_id, {})
-    for w in [x for x in store if x <= now - 60.0]:
-        del store[w]
-    db_rc, db_ts = (row["request_count"], row["token_sum"]) if row else (0, 0)
-    mem = store.get(ws, {"rc": 0, "ts": 0})
-    effective_rc = db_rc + mem["rc"]
-    effective_ts = db_ts + mem["ts"]
 
-    if effective_rc + 1 > rpm_limit or effective_ts + tokens_estimated > tpm_limit:
-        return False, max(1, 60 - int(now - ws) + 1)
-    return True, 0
-
-
-def commit_rate(key_id, tokens_actual):
-    """In-memory increment — flushed to DB by background task."""
-    ws = int(_time.time())
-    store = _rate_store.setdefault(key_id, {})
-    if ws not in store:
-        store[ws] = {"rc": 0, "ts": 0}
-    store[ws]["rc"] += 1
-    store[ws]["ts"] += tokens_actual
+def reconcile_rate(key_id, actual_tokens, admission_bucket, tokens_estimated):
+    """Adjust a reservation delta after the upstream responds."""
+    delta = actual_tokens - tokens_estimated
+    with _thread_lock:
+        store = _rate_store.get(key_id)
+        if store and admission_bucket in store:
+            store[admission_bucket]["ts"] += delta
+        else:
+            _pending.append((key_id, admission_bucket, 0, delta))

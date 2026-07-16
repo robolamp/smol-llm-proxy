@@ -6,6 +6,7 @@ import pstats
 import io
 import os
 import sys
+import time as _time
 
 sys.path.insert(0, "/workspace/smol-llm-proxy")
 os.environ["ADMIN_KEY"] = "Fdczv9kefrH2BctYxhToOWvEaBREkR7YfOaH3GIwFcE"
@@ -13,11 +14,8 @@ os.environ["DB_PATH"] = "/tmp/profile_proxy.db"
 
 from smol_llm_proxy.database import init_db, get_db
 from smol_llm_proxy.auth import create_api_key
-from smol_llm_proxy.proxy import (
-    _build_proxy_context,
-    check_rate,
-    commit_rate,
-)
+from smol_llm_proxy.proxy import _build_proxy_context
+from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate
 from starlette.datastructures import Headers
 
 init_db()
@@ -72,8 +70,9 @@ def run_single():
         "/v1/chat/completions",
         body_json={"model": "test.gguf", "messages": [{"role": "user", "content": "hello world"}]},
     )
-    check_rate(result["id"], 1000000, 1000000, 5)
-    commit_rate(result["id"], 8)
+    ws = int(_time.time())
+    reserve_rate(result["id"], 1000000, 1000000, 5)
+    reconcile_rate(result["id"], 8, ws, 5)
 
 
 def run_batch(n=500):
