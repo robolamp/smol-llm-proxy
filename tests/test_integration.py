@@ -1,9 +1,13 @@
 """Integration tests: full flow with real llama-server backends."""
 
+import os
+import tempfile
+
 import pytest
 import httpx
 import threading
 import time
+import yaml
 
 
 def _load_test_servers():
@@ -90,7 +94,7 @@ def setup_integration_servers(client, available_servers):
 
 
 @pytest.fixture(scope="function")
-def proxy_http_url():
+def proxy_http_url(available_servers):
     """Start the proxy server in a background thread for streaming tests.
 
     TestClient works for non-streaming (synthetic), but streaming needs a real HTTP endpoint.
@@ -99,6 +103,24 @@ def proxy_http_url():
     import uvicorn
     from smol_llm_proxy.config import PROXY_HOST, PROXY_PORT
     from smol_llm_proxy.main import app
+
+    # Generate a test config.yaml with the available servers so sync_config
+    # doesn't delete the servers created via the admin API.
+    test_config_path = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False).name
+    servers_cfg = []
+    for port, info in available_servers.items():
+        servers_cfg.append(
+            {
+                "name": f"port-{port}",
+                "url": info["url"],
+                "models": info["models"],
+            }
+        )
+    with open(test_config_path, "w") as f:
+        yaml.dump({"servers": servers_cfg, "aliases": {}}, f)
+
+    old_config_path = os.environ.get("CONFIG_PATH")
+    os.environ["CONFIG_PATH"] = test_config_path
 
     config = uvicorn.Config(app=app, host=PROXY_HOST, port=PROXY_PORT, log_level="error")
     server = uvicorn.Server(config)
@@ -114,6 +136,15 @@ def proxy_http_url():
 
     server.should_exit = True
     t.join(timeout=5)
+
+    os.environ.pop("CONFIG_PATH", None)
+    if old_config_path is not None:
+        os.environ["CONFIG_PATH"] = old_config_path
+
+    try:
+        os.unlink(test_config_path)
+    except FileNotFoundError:
+        pass
 
     import smol_llm_proxy.proxy
 

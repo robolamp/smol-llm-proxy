@@ -7,27 +7,26 @@ from fastapi.responses import Response
 from smol_llm_proxy.config import ADMIN_KEY, PROXY_HOST, PROXY_PORT
 from smol_llm_proxy.database import init_db, get_db
 from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_public
-from smol_llm_proxy.cache import clear_alias_cache, clear_route_cache, clear_key_cache, set_bench_cold
+from smol_llm_proxy.cache import clear_route_cache, clear_key_cache, set_bench_cold
 from smol_llm_proxy.auth import create_api_key, delete_api_key, toggle_api_key, list_api_keys
 
 set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
 
 def _parse_usage_filters(request):
-    f = {}
-    for k in ("key_id", "server_id", "start_date", "end_date"):
-        if (v := request.query_params.get(k)) is not None:
-            f[k] = int(v) if k in ("key_id", "server_id") else v
-    return f
+    return {
+        k: (int(v) if k in ("key_id", "server_id") else v)
+        for k in ("key_id", "server_id", "start_date", "end_date")
+        if (v := request.query_params.get(k)) is not None
+    }
 
 
 async def _read_json_body(request: Request):
     body = await request.body()
     try:
-        data = orjson.loads(body)
+        return body, orjson.loads(body)
     except orjson.JSONDecodeError:
         raise HTTPException(status_code=400, detail="Invalid JSON")
-    return body, data
 
 
 @asynccontextmanager
@@ -185,7 +184,6 @@ async def admin_create_alias(request: Request, authorization: str | None = Heade
             )
     except Exception:
         raise HTTPException(status_code=409, detail="Alias already exists")
-    clear_alias_cache()
     clear_route_cache()
     return {"ok": True}
 
@@ -202,7 +200,6 @@ async def admin_update_alias(alias_name: str, request: Request, authorization: s
         if not existing:
             raise HTTPException(status_code=404, detail="Alias not found")
         conn.execute("UPDATE model_aliases SET real_model_name = ? WHERE alias_name = ?", (real_model_name, alias_name))
-    clear_alias_cache()
     clear_route_cache()
     return {"ok": True}
 
@@ -212,7 +209,6 @@ async def admin_delete_alias(alias_name: str, authorization: str | None = Header
     _check_admin(authorization)
     with get_db() as conn:
         conn.execute("DELETE FROM model_aliases WHERE alias_name = ?", (alias_name,))
-    clear_alias_cache()
     clear_route_cache()
     return {"ok": True}
 

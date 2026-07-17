@@ -54,7 +54,7 @@ def resolve_routing(key_id: int, model_name: str) -> dict | None:
 
     with get_db() as conn:
         row = conn.execute(
-            """SELECT s.id as server_id, s.url, s.api_key,
+            """SELECT s.id as server_id, s.name as server_name, s.url, s.api_key,
                    COALESCE(ma.real_model_name, ?) as real_model
               FROM api_keys ak
               LEFT JOIN model_aliases ma ON ma.alias_name = ?
@@ -121,13 +121,20 @@ def init_db():
                     "DELETE FROM server_models WHERE id NOT IN ("
                     "  SELECT MAX(id) FROM server_models GROUP BY model_name)"
                 )
-                dupes = conn.execute(
-                    "SELECT model_name, COUNT(*) as cnt FROM server_models GROUP BY model_name HAVING cnt > 1"
-                ).fetchall()
-                for row in dupes:
-                    print(f"migration: model '{row['model_name']}' was on {row['cnt']} servers, kept last", flush=True)
                 conn.execute("DROP INDEX IF EXISTS idx_server_models_model")
                 conn.execute("CREATE UNIQUE INDEX idx_server_models_model ON server_models(model_name)")
-                print("migration: server_models UNIQUE(model_name) applied", flush=True)
-    except Exception as e:
-        print(f"server_models migration failed: {e}", flush=True)
+    except Exception:
+        pass
+    # Migration: denormalize key_name / server_name in usage_logs for billing attribution
+    try:
+        with get_db() as conn:
+            cols = {r["name"] for r in conn.execute("PRAGMA table_info(usage_logs)").fetchall()}
+            for col, fk, tbl in (("key_name", "key_id", "api_keys"), ("server_name", "server_id", "servers")):
+                if col not in cols:
+                    conn.execute(f"ALTER TABLE usage_logs ADD COLUMN {col} TEXT NOT NULL DEFAULT ''")
+                    conn.execute(
+                        f"UPDATE usage_logs SET {col} = (SELECT name FROM {tbl} WHERE id = usage_logs.{fk}) "
+                        f"WHERE {fk} IS NOT NULL AND {col} = ''"
+                    )
+    except Exception:
+        pass

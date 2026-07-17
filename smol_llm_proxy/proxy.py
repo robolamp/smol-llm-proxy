@@ -218,13 +218,18 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
     pms = (time.perf_counter() - t0) * 1000
     et = _estimate_input_tokens(bj)
     reconcile_rate(ki["id"], pt + ct, aw, et)
-    enqueue_usage(ki["id"], rt["server_id"], dn, rm, pt, ct, pm, pr)
+    enqueue_usage(ki["id"], rt["server_id"], dn, rm, pt, ct, pm, pr, ki["name"], rt.get("server_name", ""))
     return Response(
         **{
             "content": rb,
             "status_code": sc,
             "media_type": "application/json",
-            "headers": _timing_headers(tm, fm, pms, _proxy_overhead(tm)),
+            "headers": _timing_headers(
+                tm,
+                fm,
+                pms,
+                sum(tm.get(k, 0) for k in ("body_read_ms", "json_parse_ms", "auth_ms", "route_ms", "serialize_ms")),
+            ),
         }
     )
 
@@ -269,7 +274,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
         finally:
             await resp.aclose()
             reconcile_rate(ki["id"], tp + tc, aw, et)
-            enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr)
+            enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr, ki["name"], rt.get("server_name", ""))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
 

@@ -87,23 +87,6 @@ def stop_rate_flush():
         _flush_task = None
 
 
-def _window_totals(key_id, window_start):
-    with _thread_lock:
-        mem_rc, mem_ts = 0, 0
-        store = _rate_store.get(key_id)
-        if store:
-            stale = [k for k, v in store.items() if k <= window_start]
-            for k in stale:
-                del store[k]
-            for ws, vals in store.items():
-                if ws > window_start:
-                    mem_rc += vals["rc"]
-                    mem_ts += vals["ts"]
-    db = _get_connection(get_db_path())
-    row = db.execute(_RATE_LIMITS_SQL, (key_id, window_start)).fetchone()
-    return row["rc"] + mem_rc, row["ts"] + mem_ts
-
-
 def reserve_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
     """Check rate limit and reserve quota under one lock. Returns (allowed, retry_after, ws)."""
     now = _time.time()

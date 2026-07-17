@@ -8,7 +8,7 @@ _usage_queue: asyncio.Queue | None = None
 _logger_task: asyncio.Task = None
 _retention_task: asyncio.Task = None
 _RETENTION_DAYS = 90
-_INSERT_SQL = "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, prompt_ms, predicted_ms) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+_INSERT_SQL = "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, prompt_ms, predicted_ms, key_name, server_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
 
 def _init_async_logger():
@@ -31,8 +31,8 @@ async def _log_worker():
         if len(batch) >= 50 or (batch and got_timeout):
             try:
                 await _flush_batch(batch)
-            except Exception as e:
-                print(f"usage flush failed: {e}", flush=True)
+            except Exception:
+                pass
             batch.clear()
 
 
@@ -45,11 +45,11 @@ def _flush_batch_sync(batch):
         for item in batch:
             try:
                 _insert_log(conn, item)
-            except Exception as e:
-                print(f"Usage log failed: {e}", flush=True)
+            except Exception:
+                pass
 
 
-def _insert_log(conn, item):
+def _insert_log(conn, item):  # fmt: off
     total = item["prompt_tokens"] + item["completion_tokens"]
     conn.execute(
         _INSERT_SQL,
@@ -63,16 +63,27 @@ def _insert_log(conn, item):
             total,
             item["prompt_ms"],
             item["predicted_ms"],
+            item["key_name"],
+            item["server_name"],
         ),
-    )
+    )  # fmt: on
 
 
-def enqueue_usage(
-    key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, prompt_ms=0.0, predicted_ms=0.0
+def enqueue_usage(  # fmt: off
+    key_id,
+    server_id,
+    model_name,
+    real_model_name,
+    prompt_tokens,
+    completion_tokens,
+    prompt_ms=0.0,
+    predicted_ms=0.0,
+    key_name="",
+    server_name="",
 ):
     if _usage_queue is None:
         _init_async_logger()
-    try:
+    try:  # fmt: off
         _usage_queue.put_nowait(
             {
                 "key_id": key_id,
@@ -83,10 +94,12 @@ def enqueue_usage(
                 "completion_tokens": completion_tokens,
                 "prompt_ms": prompt_ms,
                 "predicted_ms": predicted_ms,
+                "key_name": key_name,
+                "server_name": server_name,
             }
-        )
+        )  # fmt: on
     except asyncio.QueueFull:
-        print("usage queue full, dropping log entry", flush=True)
+        print("usage queue full, dropping log entry")
 
 
 async def _shutdown_async_logger():
@@ -132,16 +145,12 @@ def stop_retention_cleanup():
 
 
 async def _retention_loop():
-    try:
-        await asyncio.to_thread(_cleanup_retention)
-    except Exception as e:
-        print(f"retention cleanup failed: {e}", flush=True)
     while True:
         await asyncio.sleep(86400)
         try:
             await asyncio.to_thread(_cleanup_retention)
-        except Exception as e:
-            print(f"retention cleanup failed: {e}", flush=True)
+        except Exception:
+            pass
 
 
 def _reset_async_logger():
@@ -163,13 +172,12 @@ def _drain_queue():
 def _build_where(filters, table_prefix=""):
     prefix = f"{table_prefix}." if table_prefix else ""
     clauses, params = [], []
-    col_map = {
-        "key_id": ("key_id", "="),
-        "server_id": ("server_id", "="),
-        "start_date": ("created_at", ">="),
-        "end_date": ("created_at", "<="),
-    }
-    for col, (db_col, op) in col_map.items():
+    for col, db_col, op in (
+        ("key_id", "key_id", "="),
+        ("server_id", "server_id", "="),
+        ("start_date", "created_at", ">="),
+        ("end_date", "created_at", "<="),
+    ):
         val = filters.get(col)
         if val is not None:
             clauses.append(f"{prefix}{db_col} {op} ?")
@@ -179,14 +187,9 @@ def _build_where(filters, table_prefix=""):
 
 def _make_filters(key_id=None, server_id=None, start_date=None, end_date=None):
     filters = {}
-    if key_id is not None:
-        filters["key_id"] = key_id
-    if server_id is not None:
-        filters["server_id"] = server_id
-    if start_date is not None:
-        filters["start_date"] = start_date
-    if end_date is not None:
-        filters["end_date"] = end_date
+    for k, v in (("key_id", key_id), ("server_id", server_id), ("start_date", start_date), ("end_date", end_date)):
+        if v is not None:
+            filters[k] = v
     return filters
 
 
@@ -199,8 +202,8 @@ def _query_with_filters(query_template, filters, limit=100, offset=0, table_pref
         return [dict(r) for r in rows]
 
 
-_USAGE_LOGS_SQL = "SELECT ul.id, ul.key_id, ul.server_id, ul.model_name, ul.real_model_name, ul.prompt_tokens, ul.completion_tokens, ul.total_tokens, ul.prompt_ms, ul.predicted_ms, ul.created_at, ak.name as user_name, s.name as server_name FROM usage_logs ul LEFT JOIN api_keys ak ON ul.key_id = ak.id LEFT JOIN servers s ON ul.server_id = s.id {where} ORDER BY ul.created_at DESC"
-_USAGE_SUMMARY_SQL = "SELECT model_name, real_model_name, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY model_name ORDER BY total_all_tokens DESC"
+_USAGE_LOGS_SQL = "SELECT ul.id, ul.key_id, ul.server_id, ul.model_name, ul.real_model_name, ul.prompt_tokens, ul.completion_tokens, ul.total_tokens, ul.prompt_ms, ul.predicted_ms, ul.created_at, COALESCE(ak.name, ul.key_name) as user_name, COALESCE(s.name, ul.server_name) as server_name FROM usage_logs ul LEFT JOIN api_keys ak ON ul.key_id = ak.id LEFT JOIN servers s ON ul.server_id = s.id {where} ORDER BY ul.created_at DESC"
+_USAGE_SUMMARY_SQL = "SELECT key_name, model_name, real_model_name, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY model_name ORDER BY total_all_tokens DESC"
 _USAGE_SUMMARY_REAL_SQL = "SELECT real_model_name, server_id, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY real_model_name, server_id ORDER BY total_all_tokens DESC"
 
 

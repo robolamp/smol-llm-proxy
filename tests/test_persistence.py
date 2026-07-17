@@ -6,23 +6,23 @@ from unittest.mock import patch, AsyncMock
 
 def test_keys_persist_after_restart(client):
     """Create a key, clear caches, verify key still works."""
-    from smol_llm_proxy.auth import create_api_key, validate_api_key
+    from smol_llm_proxy.auth import create_api_key
+    from smol_llm_proxy.auth import _find_key_info_sync
 
     result = create_api_key("persist-test")
     raw_key = result["key"]
 
-    info = validate_api_key(raw_key)
+    info = _find_key_info_sync(raw_key)
     assert info is not None and "id" in info
 
     # Simulate restart: clear in-memory caches
-    from smol_llm_proxy.cache import clear_key_cache, clear_route_cache, clear_alias_cache
+    from smol_llm_proxy.cache import clear_key_cache, clear_route_cache
 
     clear_key_cache()
     clear_route_cache()
-    clear_alias_cache()
 
     # Key should still be valid (loaded from SQLite on next lookup)
-    info = validate_api_key(raw_key)
+    info = _find_key_info_sync(raw_key)
     assert info is not None and "name" in info
     assert info["name"] == "persist-test"
 

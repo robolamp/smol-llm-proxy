@@ -61,10 +61,3 @@ def list_api_keys() -> list[dict]:
             "SELECT id, name, active, rpm_limit, tpm_limit, created_at FROM api_keys ORDER BY created_at DESC"
         ).fetchall()
     return [_row_to_dict(r) for r in rows]
-
-
-def validate_api_key(raw_key: str):
-    info = _find_key_info_sync(raw_key)
-    if info and info.get("active"):
-        return {"id": info["id"], "name": info["name"], "rpm_limit": info["rpm_limit"], "tpm_limit": info["tpm_limit"]}
-    return None
