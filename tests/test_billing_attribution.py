@@ -181,5 +181,142 @@ class TestBillingAttribution:
             assert log["server_name"] == "srv-billing"
 
 
+class TestBillingSummaryGroupBy:
+    """Two keys on one alias → summary returns two rows with per-key totals."""
+
+    @pytest.fixture(scope="function")
+    def proxy_gb(self):
+        d = Path(tempfile.mkdtemp())
+        port = _find_free_port()
+        cfg = d / "config.yaml"
+        db = d / "proxy.db"
+        _write_yaml(
+            cfg,
+            "servers:\n"
+            "  - name: srv-gb\n"
+            "    url: http://b:9999\n"
+            "    models:\n"
+            "      - m1\n"
+            "      - m2\n"
+            "aliases:\n"
+            "  fast: m1\n"
+            "  fast2: m2\n",
+        )
+        proc = _start_proxy(port, str(db), str(cfg))
+        client = httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10)
+        yield proc, client, str(db)
+        client.close()
+        _stop_proxy(proc)
+        shutil.rmtree(d, ignore_errors=True)
+
+    def test_two_keys_same_alias_two_rows(self, proxy_gb):
+        proc, client, db_path = proxy_gb
+
+        # Create alice key
+        resp = client.post(
+            "/admin/keys",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"name": "alice"},
+        )
+        assert resp.status_code == 200
+        alice_id = resp.json()["id"]
+
+        # Create bob key
+        resp = client.post(
+            "/admin/keys",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"name": "bob"},
+        )
+        assert resp.status_code == 200
+        bob_id = resp.json()["id"]
+
+        # Insert usage logs: alice × 1 request (12 tokens), bob × 5 requests (12 tokens each)
+        import sqlite3
+
+        db = sqlite3.connect(db_path)
+        db.execute(
+            "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, key_name, server_name) VALUES (?,?,?,?, ?, ?, ?, ?, ?)",
+            (alice_id, 1, "fast", "m1", 6, 6, 12, "alice", "srv-gb"),
+        )
+        for i in range(5):
+            db.execute(
+                "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, key_name, server_name) VALUES (?,?,?,?, ?, ?, ?, ?, ?)",
+                (bob_id, 1, "fast", "m1", 6, 6, 12, "bob", "srv-gb"),
+            )
+        db.commit()
+        db.close()
+
+        # Summary must return two rows
+        resp = client.get("/admin/usage/summary", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
+        assert resp.status_code == 200
+        summary = resp.json()
+        assert len(summary) == 2
+
+        # Find each key's row
+        alice_row = next((r for r in summary if r["key_name"] == "alice"), None)
+        bob_row = next((r for r in summary if r["key_name"] == "bob"), None)
+        assert alice_row is not None
+        assert bob_row is not None
+
+        # Alice: 1 request, 12 tokens
+        assert alice_row["request_count"] == 1
+        assert alice_row["total_all_tokens"] == 12
+
+        # Bob: 5 requests, 60 tokens
+        assert bob_row["request_count"] == 5
+        assert bob_row["total_all_tokens"] == 60
+
+    def test_retargeted_alias_two_real_models(self, proxy_gb):
+        proc, client, db_path = proxy_gb
+
+        # Create a key
+        resp = client.post(
+            "/admin/keys",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"name": "retarget-key"},
+        )
+        assert resp.status_code == 200
+        key_id = resp.json()["id"]
+
+        import sqlite3
+
+        db = sqlite3.connect(db_path)
+        # Use old alias target m1
+        db.execute(
+            "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, key_name, server_name) VALUES (?,?,?,?, ?, ?, ?, ?, ?)",
+            (key_id, 1, "fast", "m1", 10, 10, 20, "retarget-key", "srv-gb"),
+        )
+        # Use new alias target m2
+        db.execute(
+            "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, key_name, server_name) VALUES (?,?,?,?, ?, ?, ?, ?, ?)",
+            (key_id, 1, "fast", "m2", 15, 15, 30, "retarget-key", "srv-gb"),
+        )
+        db.commit()
+        db.close()
+
+        # Retarget alias via admin API
+        resp = client.patch(
+            "/admin/aliases/fast",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"real_model_name": "m2"},
+        )
+        assert resp.status_code == 200
+
+        # Summary must return two rows with distinct real_model_name
+        resp = client.get("/admin/usage/summary", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
+        assert resp.status_code == 200
+        summary = resp.json()
+        assert len(summary) == 2
+
+        m1_row = next((r for r in summary if r["real_model_name"] == "m1"), None)
+        m2_row = next((r for r in summary if r["real_model_name"] == "m2"), None)
+        assert m1_row is not None
+        assert m2_row is not None
+
+        # Totals must NOT be merged
+        assert m1_row["total_all_tokens"] == 20
+        assert m2_row["total_all_tokens"] == 30
+
+
 def _write_yaml(path, content):
     Path(path).write_text(content)

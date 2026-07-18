@@ -1,7 +1,6 @@
 """Integration tests: full flow with real llama-server backends."""
 
 import os
-import tempfile
 
 import pytest
 import httpx
@@ -46,16 +45,20 @@ def integration_key(client):
     """Create a dedicated key for integration tests."""
     import uuid
     from smol_llm_proxy.auth import create_api_key
+    from smol_llm_proxy.database import get_db
 
     name = f"integration-tester-{uuid.uuid4().hex[:8]}"
     result = create_api_key(name)
     yield result["key"]
-    from smol_llm_proxy.database import get_db
+    import time
+
+    time.sleep(2)
 
     with get_db() as conn:
         key_id = conn.execute("SELECT id FROM api_keys WHERE name = ?", (name,)).fetchone()
         if key_id:
             conn.execute("DELETE FROM usage_logs WHERE key_id = ?", (key_id["id"],))
+            conn.execute("DELETE FROM rate_limits WHERE key_id = ?", (key_id["id"],))
             conn.execute("DELETE FROM api_keys WHERE id = ?", (key_id["id"],))
 
 
@@ -93,20 +96,21 @@ def setup_integration_servers(client, available_servers):
                     )
 
 
-@pytest.fixture(scope="function")
+@pytest.fixture(scope="session")
 def proxy_http_url(available_servers):
     """Start the proxy server in a background thread for streaming tests.
 
     TestClient works for non-streaming (synthetic), but streaming needs a real HTTP endpoint.
     This fixture starts uvicorn in a thread and yields the base URL.
     """
+    import tempfile as _tempfile
     import uvicorn
     from smol_llm_proxy.config import PROXY_HOST, PROXY_PORT
     from smol_llm_proxy.main import app
 
     # Generate a test config.yaml with the available servers so sync_config
     # doesn't delete the servers created via the admin API.
-    test_config_path = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False).name
+    test_config_path = _tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False).name
     servers_cfg = []
     for port, info in available_servers.items():
         servers_cfg.append(
@@ -130,12 +134,28 @@ def proxy_http_url(available_servers):
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
-    time.sleep(1)  # wait for server to start
+    # wait for server to start
+    import httpx as _httpx
 
-    yield f"http://{PROXY_HOST}:{PROXY_PORT}"
+    for _ in range(20):
+        try:
+            r = _httpx.get(f"http://127.0.0.1:{PROXY_PORT}/health", timeout=1)
+            if r.status_code == 200:
+                break
+        except Exception:
+            pass
+        time.sleep(0.5)
+    else:
+        raise RuntimeError(f"Proxy failed to start on port {PROXY_PORT}")
+
+    yield f"http://127.0.0.1:{PROXY_PORT}"
 
     server.should_exit = True
     t.join(timeout=5)
+
+    from smol_llm_proxy.rate_limiter import stop_rate_flush
+
+    stop_rate_flush()
 
     os.environ.pop("CONFIG_PATH", None)
     if old_config_path is not None:
@@ -305,7 +325,7 @@ class TestUsageLogging:
         model = available_servers[8080]["models"][0]
 
         with httpx.Client(base_url=proxy_http_url, timeout=30) as c:
-            c.post(
+            r = c.post(
                 "/v1/chat/completions",
                 headers={
                     "Authorization": f"Bearer {integration_key}",
@@ -317,6 +337,7 @@ class TestUsageLogging:
                     "stream": True,
                 },
             )
+            print(f"proxy response: {r.status_code}")
 
         from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
 

@@ -255,6 +255,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
 
     async def generate():
         nonlocal tp, tc, lpm, lpr
+        seen = 0
         try:
             async for chunk in resp.aiter_bytes():
                 if not chunk:
@@ -267,16 +268,52 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                 if p > 0 or c > 0:
                     tp = p
                     tc = c
+                seen += _count_deltas(text)
                 if pm > 0 or pr > 0:
                     lpm = pm
                     lpr = pr
                 yield chunk
         finally:
             await resp.aclose()
+            if not (tp or tc):
+                tp, tc = et, seen
             reconcile_rate(ki["id"], tp + tc, aw, et)
             enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr, ki["name"], rt.get("server_name", ""))
 
     return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+def _count_deltas(text):
+    """Count SSE events carrying choices[].delta.content (one event == one generated token)."""
+    count = 0
+    try:
+        if isinstance(text, bytes):
+            text = text.decode("utf-8", errors="replace")
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("data: "):
+                line = line[6:]
+            if line == "[DONE]" or "choices" not in line:
+                continue
+            try:
+                data = orjson.loads(line)
+            except (orjson.JSONDecodeError, TypeError):
+                continue
+            choices = data.get("choices", []) if isinstance(data, dict) else []
+            if not isinstance(choices, list):
+                continue
+            for ch in choices:
+                if not isinstance(ch, dict):
+                    continue
+                delta = ch.get("delta", {})
+                if not isinstance(delta, dict):
+                    continue
+                content = delta.get("content")
+                if isinstance(content, str) and content:
+                    count += len(content)
+    except (UnicodeDecodeError, TypeError):
+        pass
+    return count
 
 
 def _parse_sse_usage(text):

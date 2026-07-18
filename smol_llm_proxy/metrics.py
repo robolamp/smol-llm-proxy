@@ -21,19 +21,26 @@ def _init_async_logger():
 
 async def _log_worker():
     batch = []
-    while True:
-        got_timeout = False
-        try:
-            item = await asyncio.wait_for(_usage_queue.get(), timeout=1.0)
-            batch.append(item)
-        except asyncio.TimeoutError:
-            got_timeout = True
-        if len(batch) >= 50 or (batch and got_timeout):
+    try:
+        while True:
+            got_timeout = False
+            try:
+                item = await asyncio.wait_for(_usage_queue.get(), timeout=1.0)
+                batch.append(item)
+            except asyncio.TimeoutError:
+                got_timeout = True
+            if got_timeout or len(batch) >= 50:
+                try:
+                    await _flush_batch(batch)
+                except Exception:
+                    pass
+                batch.clear()
+    finally:
+        if batch:
             try:
                 await _flush_batch(batch)
             except Exception:
                 pass
-            batch.clear()
 
 
 async def _flush_batch(batch):
@@ -121,6 +128,9 @@ def flush_usage_logs():
     if _usage_queue is None:
         return
     batch = _drain_queue()
+    if not batch and _logger_task and not _logger_task.done():
+        time.sleep(2.0)
+        batch = _drain_queue()
     if batch:
         _flush_batch_sync(batch)
 
@@ -155,6 +165,10 @@ async def _retention_loop():
 
 def _reset_async_logger():
     global _usage_queue, _logger_task
+    if _usage_queue is not None:
+        batch = _drain_queue()
+        if batch:
+            _flush_batch_sync(batch)
     _usage_queue = None
     _logger_task = None
 
@@ -203,7 +217,7 @@ def _query_with_filters(query_template, filters, limit=100, offset=0, table_pref
 
 
 _USAGE_LOGS_SQL = "SELECT ul.id, ul.key_id, ul.server_id, ul.model_name, ul.real_model_name, ul.prompt_tokens, ul.completion_tokens, ul.total_tokens, ul.prompt_ms, ul.predicted_ms, ul.created_at, COALESCE(ak.name, ul.key_name) as user_name, COALESCE(s.name, ul.server_name) as server_name FROM usage_logs ul LEFT JOIN api_keys ak ON ul.key_id = ak.id LEFT JOIN servers s ON ul.server_id = s.id {where} ORDER BY ul.created_at DESC"
-_USAGE_SUMMARY_SQL = "SELECT key_name, model_name, real_model_name, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY model_name ORDER BY total_all_tokens DESC"
+_USAGE_SUMMARY_SQL = "SELECT key_name, model_name, real_model_name, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY key_name, model_name, real_model_name ORDER BY total_all_tokens DESC"
 _USAGE_SUMMARY_REAL_SQL = "SELECT real_model_name, server_id, COUNT(*) as request_count, SUM(prompt_tokens) as total_prompt_tokens, SUM(completion_tokens) as total_completion_tokens, SUM(total_tokens) as total_all_tokens FROM usage_logs {where} GROUP BY real_model_name, server_id ORDER BY total_all_tokens DESC"
 
 
