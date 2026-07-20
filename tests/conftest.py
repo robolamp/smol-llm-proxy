@@ -78,9 +78,14 @@ def _reset_http_client():
     finally:
         smol_llm_proxy.proxy._httpx_client = None
 
-    from smol_llm_proxy.metrics import _reset_async_logger
+    import smol_llm_proxy.metrics as _m
 
-    _reset_async_logger()
+    if _m._usage_queue is not None:
+        batch = _m._drain_queue()
+        if batch:
+            _m._flush_batch_sync(batch)
+    _m._usage_queue = None
+    _m._logger_task = None
 
 
 @pytest.fixture(scope="session")
@@ -96,9 +101,12 @@ def admin_key(client):
 
     result = create_api_key("test-user")
     yield result["key"]
-    from smol_llm_proxy.metrics import flush_usage_logs
+    import smol_llm_proxy.metrics as _m
 
-    flush_usage_logs()
+    if _m._usage_queue is not None:
+        batch = _m._drain_queue()
+        if batch:
+            _m._flush_batch_sync(batch)
     from smol_llm_proxy.database import get_db
 
     with get_db() as conn:

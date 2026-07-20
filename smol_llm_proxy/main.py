@@ -286,14 +286,6 @@ async def admin_get_usage(request: Request, authorization: str | None = Header(N
     return {"logs": get_usage_logs(**filters, limit=100, offset=0), "summary": get_usage_summary(**filters)}
 
 
-@app.get("/admin/usage/summary")
-async def admin_get_usage_summary(request: Request, authorization: str | None = Header(None)):
-    _check_admin(authorization)
-    from smol_llm_proxy.metrics import get_usage_summary
-
-    return get_usage_summary(**_parse_usage_filters(request))
-
-
 @app.get("/admin/usage/summary/real")
 async def admin_get_usage_summary_real(request: Request, authorization: str | None = Header(None)):
     _check_admin(authorization)

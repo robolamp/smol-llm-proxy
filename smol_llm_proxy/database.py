@@ -35,16 +35,6 @@ def get_db():
         raise
 
 
-def reset_db_connection():
-    """Close and reset the thread-local DB connection. For testing."""
-    if hasattr(_thread_local, "conn") and _thread_local.conn is not None:
-        try:
-            _thread_local.conn.close()
-        except Exception:
-            pass
-        _thread_local.conn = None
-
-
 def resolve_routing(key_id: int, model_name: str) -> dict | None:
     """Resolve alias + find server for a given key. Returns server info or None."""
     cache_key = f"{key_id}:{model_name}"

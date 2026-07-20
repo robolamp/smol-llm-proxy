@@ -98,9 +98,14 @@ class TestUsageLogging:
                 json={"model": server_with_model["model_name"], "messages": [{"role": "user", "content": "hi"}]},
             )
 
-        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
+        from smol_llm_proxy.metrics import get_usage_logs
+
         logs = get_usage_logs()
         last = logs[0]
         assert last["prompt_tokens"] == 10
@@ -134,9 +139,14 @@ class TestAliasResolution:
 
         assert resp.status_code == 200
 
-        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
+        from smol_llm_proxy.metrics import get_usage_logs
+
         last = get_usage_logs()[0]
         assert last["model_name"] == alias
         assert last["real_model_name"] == server_with_model["model_name"]
@@ -203,63 +213,14 @@ class TestProxyHelpers:
         assert pt == 5 and ct == 10 and pm == 12.3 and pr == 45.6
 
     def test_parse_sse_llama_cpp(self):
-        from smol_llm_proxy.proxy import _parse_sse_usage
+        from smol_llm_proxy.proxy import _parse_sse_chunk
 
-        pt, ct, pm, pr = _parse_sse_usage(
+        pt, ct, dc, pm, pr = _parse_sse_chunk(
             'data: {"timings":{"prompt_n":13,"predicted_n":10,"prompt_ms":16.8,"predicted_ms":57.2}}'
         )
-        assert pt == 13 and ct == 10
+        assert pt == 13 and ct == 10 and dc == 0
 
     def test_parse_sse_done(self):
-        from smol_llm_proxy.proxy import _parse_sse_usage
+        from smol_llm_proxy.proxy import _parse_sse_chunk
 
-        assert _parse_sse_usage("[DONE]") == (0, 0, 0.0, 0.0)
-
-
-class TestTimingHeaders:
-    def test_overhead_is_sum_of_disjoint_segments(self):
-        from smol_llm_proxy.proxy import _proxy_overhead
-
-        timing = {
-            "body_read_ms": 1.2,
-            "json_parse_ms": 0.8,
-            "auth_ms": 3.5,
-            "route_ms": 2.1,
-            "serialize_ms": 0.5,
-        }
-        overhead = _proxy_overhead(timing)
-        expected = (
-            timing["body_read_ms"]
-            + timing["json_parse_ms"]
-            + timing["auth_ms"]
-            + timing["route_ms"]
-            + timing["serialize_ms"]
-        )
-        assert abs(overhead - expected) < 0.001
-
-    def test_no_duplicate_segment_headers(self):
-        from smol_llm_proxy.proxy import _timing_headers
-
-        timing = {
-            "body_read_ms": 1.2,
-            "json_parse_ms": 0.8,
-            "auth_ms": 3.5,
-            "route_ms": 2.1,
-            "serialize_ms": 0.5,
-        }
-        headers = _timing_headers(timing, 10.0, 15.0, 7.6)
-        segment_values = [
-            headers["X-Proxy-Body-Read"],
-            headers["X-Proxy-Json-Parse"],
-            headers["X-Proxy-Auth-Time"],
-            headers["X-Proxy-Route-Time"],
-            headers["X-Proxy-Serialize-Time"],
-        ]
-        assert len(segment_values) == len(set(segment_values)), f"Duplicate segment headers: {segment_values}"
-
-    def test_no_alias_ms_header(self):
-        from smol_llm_proxy.proxy import _timing_headers
-
-        timing = {"body_read_ms": 1.0, "json_parse_ms": 0.5, "auth_ms": 2.0, "route_ms": 1.5, "serialize_ms": 0.3}
-        headers = _timing_headers(timing, 10.0, 15.0, 5.3)
-        assert "X-Proxy-Alias-Time" not in headers
+        assert _parse_sse_chunk("[DONE]") == (0, 0, 0, 0.0, 0.0)

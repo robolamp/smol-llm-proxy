@@ -92,9 +92,14 @@ class TestStreamingProxy:
 
         assert resp.status_code == 200
 
-        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
+        from smol_llm_proxy.metrics import get_usage_logs
+
         logs = get_usage_logs()
         last = logs[0]
         assert last["prompt_tokens"] == 5

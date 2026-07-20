@@ -29,7 +29,7 @@ def test_keys_persist_after_restart(client):
 
 def test_usage_logs_persist_after_restart(client, server_with_model):
     """Ensure usage logs written to DB survive cache clears (proxy restart)."""
-    from smol_llm_proxy.metrics import enqueue_usage, flush_usage_logs
+    from smol_llm_proxy.metrics import enqueue_usage
     from smol_llm_proxy.cache import clear_key_cache
     from smol_llm_proxy.database import get_db
 
@@ -69,7 +69,12 @@ def test_usage_logs_persist_after_restart(client, server_with_model):
     )
 
     # Flush synchronously
-    flush_usage_logs()
+    import smol_llm_proxy.metrics as _m
+
+    if _m._usage_queue is not None:
+        batch = _m._drain_queue()
+        if batch:
+            _m._flush_batch_sync(batch)
 
     with get_db() as conn:
         rows_before = conn.execute("SELECT COUNT(*) as cnt FROM usage_logs").fetchone()["cnt"]

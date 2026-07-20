@@ -24,6 +24,7 @@ class TestRateReconcileSystem:
             _rate_store,
             _pending,
             _thread_lock,
+            _flush_to_db,
             reserve_rate,
             reconcile_rate,
             start_rate_flush,
@@ -48,11 +49,11 @@ class TestRateReconcileSystem:
                 allowed, _, ws = reserve_rate(key_id, 10, 1000000, 10)
                 assert allowed is True
 
-                await asyncio.sleep(1.5)
+                await _flush_to_db()
 
                 reconcile_rate(key_id, actual_tokens=5010, admission_bucket=ws, tokens_estimated=10)
 
-                await asyncio.sleep(1.5)
+                await _flush_to_db()
 
                 with get_db() as conn:
                     row = conn.execute(
@@ -69,6 +70,7 @@ class TestRateReconcileSystem:
         from smol_llm_proxy.rate_limiter import (
             _pending,
             _thread_lock,
+            _flush_to_db,
             reconcile_rate,
             start_rate_flush,
             stop_rate_flush,
@@ -84,7 +86,7 @@ class TestRateReconcileSystem:
 
                 assert len(_pending) == 1
 
-                await asyncio.sleep(1.5)
+                await _flush_to_db()
 
                 with _thread_lock:
                     assert len(_pending) == 0

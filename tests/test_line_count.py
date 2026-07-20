@@ -47,4 +47,4 @@ def test_line_count():
         if _is_code_line(text) > 100:
             print(f"  {f.name}: {_is_code_line(text)} lines")
         code_lines += _is_code_line(text)
-    assert code_lines <= 1200, f"Expected <=1200 code lines, got {code_lines}"
+    assert code_lines <= 1100, f"Expected <=1100 code lines, got {code_lines}"

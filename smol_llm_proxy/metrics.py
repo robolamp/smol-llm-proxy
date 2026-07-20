@@ -124,17 +124,6 @@ async def _shutdown_async_logger():
             pass
 
 
-def flush_usage_logs():
-    if _usage_queue is None:
-        return
-    batch = _drain_queue()
-    if not batch and _logger_task and not _logger_task.done():
-        time.sleep(2.0)
-        batch = _drain_queue()
-    if batch:
-        _flush_batch_sync(batch)
-
-
 def _cleanup_retention():
     cutoff = time.time() - (_RETENTION_DAYS * 86400)
     with get_db() as conn:
@@ -161,16 +150,6 @@ async def _retention_loop():
             await asyncio.to_thread(_cleanup_retention)
         except Exception:
             pass
-
-
-def _reset_async_logger():
-    global _usage_queue, _logger_task
-    if _usage_queue is not None:
-        batch = _drain_queue()
-        if batch:
-            _flush_batch_sync(batch)
-    _usage_queue = None
-    _logger_task = None
 
 
 def _drain_queue():

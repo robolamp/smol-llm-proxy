@@ -2,7 +2,7 @@
 
 from unittest.mock import patch, Mock, AsyncMock
 
-from smol_llm_proxy.proxy import _count_deltas
+from smol_llm_proxy.proxy import _parse_sse_chunk
 
 
 def _mock_sse_no_usage(n_tokens=5):
@@ -50,22 +50,25 @@ def _mock_sse_with_usage():
     ]
 
 
-class TestCountDeltas:
+class TestParseSseChunk:
     def test_counts_delta_content(self):
         text = (
             'data: {"choices":[{"delta":{"content":"hello"}}]}\n'
             'data: {"choices":[{"delta":{"content":""}}]}\n'
             "data: [DONE]\n"
         )
-        assert _count_deltas(text) == 5
+        _, _, dc, _, _ = _parse_sse_chunk(text)
+        assert dc == 5
 
     def test_ignores_empty_content(self):
         text = 'data: {"choices":[{"delta":{}}]}\n'
-        assert _count_deltas(text) == 0
+        _, _, dc, _, _ = _parse_sse_chunk(text)
+        assert dc == 0
 
     def test_ignores_no_choices(self):
         text = 'data: {"timings":{"prompt_n":1,"predicted_n":2}}\n'
-        assert _count_deltas(text) == 0
+        _, _, dc, _, _ = _parse_sse_chunk(text)
+        assert dc == 0
 
 
 class TestStreamingNoUsage:

@@ -251,9 +251,12 @@ class TestStreaming:
         done_chunks = [c for c in chunks if "[DONE]" in c]
         assert len(done_chunks) == 1
 
-        from smol_llm_proxy.metrics import flush_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
 
 
 class TestMultiServerRouting:
@@ -305,9 +308,14 @@ class TestUsageLogging:
             },
         )
 
-        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
+        from smol_llm_proxy.metrics import get_usage_logs
+
         logs = get_usage_logs()
         assert len(logs) >= 1
         last = logs[0]
@@ -339,9 +347,14 @@ class TestUsageLogging:
             )
             print(f"proxy response: {r.status_code}")
 
-        from smol_llm_proxy.metrics import flush_usage_logs, get_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
+        from smol_llm_proxy.metrics import get_usage_logs
+
         logs = get_usage_logs()
         assert len(logs) >= 1
         last = logs[0]
@@ -380,9 +393,12 @@ class TestUsageLogging:
                 },
             )
 
-        from smol_llm_proxy.metrics import flush_usage_logs
+        import smol_llm_proxy.metrics as _m
 
-        flush_usage_logs()
+        if _m._usage_queue is not None:
+            batch = _m._drain_queue()
+            if batch:
+                _m._flush_batch_sync(batch)
 
         from smol_llm_proxy.database import get_db
 

@@ -3,7 +3,6 @@
 import asyncio
 import httpx
 import orjson
-import time
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse, Response, JSONResponse
 from .config import HTTPX_TIMEOUT, PROXY_MAX_CONNECTIONS, PROXY_MAX_KEEPALIVE, PROXY_KEEPALIVE_EXPIRY
@@ -100,56 +99,35 @@ async def _check_rate_limit(key_info, body_json):
     return None, ws
 
 
-def _proxy_overhead(timing):
-    return sum(timing.get(k, 0) for k in ("body_read_ms", "json_parse_ms", "auth_ms", "route_ms", "serialize_ms"))
-
-
 async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None):
-    timing = {
-        "body_read_ms": 0,
-        "json_parse_ms": 0,
-        "auth_ms": 0,
-        "route_ms": 0,
-        "serialize_ms": 0,
-    }
     user_key = _extract_user_key(request.headers.get("authorization"))
     if not user_key:
         raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    t = time.perf_counter()
     if body_bytes is None:
         body_bytes = await request.body()
-    timing["body_read_ms"] = (time.perf_counter() - t) * 1000
-    t = time.perf_counter()
     if body_json is None:
         try:
             body_json = orjson.loads(body_bytes)
         except orjson.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
-    timing["json_parse_ms"] = (time.perf_counter() - t) * 1000
     model_name = body_json.get("model", "")
     key_hash = _hash_key(user_key)
-    t = time.perf_counter()
     cached_key = get_cached_key(key_hash)
     if cached_key:
         key_info = cached_key
     else:
         key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
-    timing["auth_ms"] = (time.perf_counter() - t) * 1000
     if not key_info or not key_info.get("active"):
         raise HTTPException(status_code=403, detail="Invalid or inactive API key")
-    t = time.perf_counter()
     routing = await asyncio.to_thread(resolve_routing, key_info["id"], model_name)
-    timing["route_ms"] = (time.perf_counter() - t) * 1000
     real_model_name = routing["real_model"] if routing else model_name
     display_name = model_name
     if display_name != real_model_name:
         body_json["model"] = real_model_name
-        t = time.perf_counter()
         body_bytes = orjson.dumps(body_json)
-        timing["serialize_ms"] = (time.perf_counter() - t) * 1000
     if not routing:
         raise HTTPException(status_code=404, detail=f"No server configured for model '{display_name}'")
-    return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes
 
 
 _HOP_BY_HOP = frozenset(
@@ -166,31 +144,18 @@ def _build_upstream(server, request, path):
     return target_url, upstream_headers
 
 
-def _timing_headers(t, fm, pm, po):
-    return {
-        "X-Proxy-Body-Read": f"{t['body_read_ms']:.2f}ms",
-        "X-Proxy-Json-Parse": f"{t['json_parse_ms']:.2f}ms",
-        "X-Proxy-Auth-Time": f"{t['auth_ms']:.2f}ms",
-        "X-Proxy-Route-Time": f"{t['route_ms']:.2f}ms",
-        "X-Proxy-Serialize-Time": f"{t['serialize_ms']:.2f}ms",
-        "X-Proxy-Forward-Time": f"{fm:.2f}ms",
-        "X-Proxy-Parse-Time": f"{pm:.2f}ms",
-        "X-Proxy-Total-Overhead": f"{po:.2f}ms",
-    }
-
-
 async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
-    key_info, routing, display_name, real_model_name, body_json, body_bytes, timing = await _build_proxy_context(
+    key_info, routing, display_name, real_model_name, body_json, body_bytes = await _build_proxy_context(
         request, path, body_bytes=body_bytes, body_json=body_json
     )
     server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
     target_url, upstream_headers = _build_upstream(server, request, path)
-    return key_info, routing, display_name, real_model_name, body_json, body_bytes, timing, target_url, upstream_headers
+    return key_info, routing, display_name, real_model_name, body_json, body_bytes, target_url, upstream_headers
 
 
 async def _check_and_setup(request, path, *, body_bytes=None, body_json=None):
     result = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    ki, rt, dn, rm, bj, bb, tm, tu, uh = result
+    ki, rt, dn, rm, bj, bb, tu, uh = result
     rr, aw = await _check_rate_limit(ki, bj)
     if rr:
         return rr
@@ -210,35 +175,20 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
     result = await _check_and_setup(request, path, body_bytes=body_bytes, body_json=body_json)
     if isinstance(result, JSONResponse):
         return result
-    ki, rt, dn, rm, bj, bb, tm, tu, uh, aw = result
-    t0 = time.perf_counter()
+    ki, rt, dn, rm, bj, bb, tu, uh, aw = result
     sc, rb = await _forward_request(tu, uh, bb, request.method)
-    fm = (time.perf_counter() - t0) * 1000
     pt, ct, pm, pr = _parse_usage_from_body(rb)
-    pms = (time.perf_counter() - t0) * 1000
     et = _estimate_input_tokens(bj)
     reconcile_rate(ki["id"], pt + ct, aw, et)
     enqueue_usage(ki["id"], rt["server_id"], dn, rm, pt, ct, pm, pr, ki["name"], rt.get("server_name", ""))
-    return Response(
-        **{
-            "content": rb,
-            "status_code": sc,
-            "media_type": "application/json",
-            "headers": _timing_headers(
-                tm,
-                fm,
-                pms,
-                sum(tm.get(k, 0) for k in ("body_read_ms", "json_parse_ms", "auth_ms", "route_ms", "serialize_ms")),
-            ),
-        }
-    )
+    return Response(content=rb, status_code=sc, media_type="application/json")
 
 
 async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
     result = await _check_and_setup(request, path, body_bytes=body_bytes, body_json=body_json)
     if isinstance(result, JSONResponse):
         return result
-    ki, rt, dn, rm, bj, bb, tm, tu, uh, aw = result
+    ki, rt, dn, rm, bj, bb, tu, uh, aw = result
     tp = tc = 0
     lpm = lpr = 0.0
     et = _estimate_input_tokens(bj)
@@ -262,13 +212,13 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                     continue
                 try:
                     text = chunk.decode("utf-8")
-                    p, c, pm, pr = _parse_sse_usage(text)
+                    p, c, dc, pm, pr = _parse_sse_chunk(text)
                 except (UnicodeDecodeError, TypeError):
-                    p, c, pm, pr = 0, 0, 0.0, 0.0
+                    p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
                 if p > 0 or c > 0:
                     tp = p
                     tc = c
-                seen += _count_deltas(text)
+                seen += dc
                 if pm > 0 or pr > 0:
                     lpm = pm
                     lpr = pr
@@ -283,42 +233,9 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
     return StreamingResponse(generate(), media_type="text/event-stream")
 
 
-def _count_deltas(text):
-    """Count SSE events carrying choices[].delta.content (one event == one generated token)."""
-    count = 0
-    try:
-        if isinstance(text, bytes):
-            text = text.decode("utf-8", errors="replace")
-        for line in text.strip().split("\n"):
-            line = line.strip()
-            if line.startswith("data: "):
-                line = line[6:]
-            if line == "[DONE]" or "choices" not in line:
-                continue
-            try:
-                data = orjson.loads(line)
-            except (orjson.JSONDecodeError, TypeError):
-                continue
-            choices = data.get("choices", []) if isinstance(data, dict) else []
-            if not isinstance(choices, list):
-                continue
-            for ch in choices:
-                if not isinstance(ch, dict):
-                    continue
-                delta = ch.get("delta", {})
-                if not isinstance(delta, dict):
-                    continue
-                content = delta.get("content")
-                if isinstance(content, str) and content:
-                    count += len(content)
-    except (UnicodeDecodeError, TypeError):
-        pass
-    return count
-
-
-def _parse_sse_usage(text):
-    """Extract token counts and timing from an SSE text chunk."""
-    total_p = total_c = 0
+def _parse_sse_chunk(text):
+    """Parse SSE chunk: extract timings, usage, and delta count in one pass."""
+    total_p = total_c = delta_count = 0
     last_pm = last_pr = 0.0
     try:
         if isinstance(text, bytes):
@@ -327,14 +244,16 @@ def _parse_sse_usage(text):
             line = line.strip()
             if line.startswith("data: "):
                 line = line[6:]
-            if line == "[DONE]" or ("timings" not in line and "usage" not in line):
+            if line == "[DONE]":
                 continue
             try:
                 data = orjson.loads(line)
             except (orjson.JSONDecodeError, TypeError):
                 continue
-            timings = data.get("timings", {}) if isinstance(data, dict) else {}
-            if timings and isinstance(timings, dict):
+            if not isinstance(data, dict):
+                continue
+            timings = data.get("timings", {})
+            if isinstance(timings, dict) and timings:
                 pn = timings.get("prompt_n", 0) or 0
                 cn = timings.get("predicted_n", 0) or 0
                 if pn > 0 or cn > 0:
@@ -342,13 +261,22 @@ def _parse_sse_usage(text):
                     total_c += cn
                     last_pm = timings.get("prompt_ms", 0.0) or 0.0
                     last_pr = timings.get("predicted_ms", 0.0) or 0.0
-            usage = data.get("usage", {}) if isinstance(data, dict) else {}
+            usage = data.get("usage", {})
             if isinstance(usage, dict):
                 total_p += usage.get("prompt_tokens", 0)
                 total_c += usage.get("completion_tokens", 0)
+            choices = data.get("choices", [])
+            if isinstance(choices, list):
+                for ch in choices:
+                    if isinstance(ch, dict):
+                        delta = ch.get("delta", {})
+                        if isinstance(delta, dict):
+                            content = delta.get("content")
+                            if isinstance(content, str) and content:
+                                delta_count += len(content)
     except (UnicodeDecodeError, TypeError):
         pass
-    return total_p, total_c, last_pm, last_pr
+    return total_p, total_c, delta_count, last_pm, last_pr
 
 
 async def proxy_public(body=b"", path="/v1/models"):

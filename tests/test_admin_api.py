@@ -172,11 +172,11 @@ class TestAdminUsageSummary:
             )
 
         resp = client.get(
-            "/admin/usage/summary",
+            "/admin/usage",
             headers={"Authorization": "Bearer test-admin-key"},
         )
         assert resp.status_code == 200
-        summary = resp.json()
+        summary = resp.json()["summary"]
         assert len(summary) >= 1
         assert any(item["model_name"] == model for item in summary)
 
@@ -251,21 +251,21 @@ class TestAdminUsageSummary:
             )
 
         resp = client.get(
-            "/admin/usage/summary",
+            "/admin/usage",
             headers={"Authorization": "Bearer test-admin-key"},
             params={"start_date": past_date, "end_date": future_date},
         )
         assert resp.status_code == 200
-        summary = resp.json()
+        summary = resp.json()["summary"]
         assert len(summary) >= 1
 
         resp2 = client.get(
-            "/admin/usage/summary",
+            "/admin/usage",
             headers={"Authorization": "Bearer test-admin-key"},
             params={"start_date": future_date},
         )
         assert resp2.status_code == 200
-        assert resp2.json() == []
+        assert resp2.json()["summary"] == []
 
 
 class TestAdminUsageLogsLeftJoin:

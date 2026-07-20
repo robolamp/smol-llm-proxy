@@ -132,9 +132,9 @@ class TestBillingAttribution:
             assert log["user_name"] == "billing-victim"
 
         # Verify summary still attributes tokens
-        resp = client.get("/admin/usage/summary", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
+        resp = client.get("/admin/usage", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
         assert resp.status_code == 200
-        summary = resp.json()
+        summary = resp.json()["summary"]
         assert any(item.get("key_name") == "billing-victim" for item in summary)
 
     def test_server_name_survives_delete(self, proxy):
@@ -247,9 +247,9 @@ class TestBillingSummaryGroupBy:
         db.close()
 
         # Summary must return two rows
-        resp = client.get("/admin/usage/summary", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
+        resp = client.get("/admin/usage", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
         assert resp.status_code == 200
-        summary = resp.json()
+        summary = resp.json()["summary"]
         assert len(summary) == 2
 
         # Find each key's row
@@ -303,9 +303,9 @@ class TestBillingSummaryGroupBy:
         assert resp.status_code == 200
 
         # Summary must return two rows with distinct real_model_name
-        resp = client.get("/admin/usage/summary", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
+        resp = client.get("/admin/usage", headers={"Authorization": f"Bearer {ADMIN_KEY}"})
         assert resp.status_code == 200
-        summary = resp.json()
+        summary = resp.json()["summary"]
         assert len(summary) == 2
 
         m1_row = next((r for r in summary if r["real_model_name"] == "m1"), None)
