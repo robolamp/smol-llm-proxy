@@ -33,12 +33,14 @@ def _flush_to_db_sync(data, pending=None):
                             conn.execute(upsert_sql, (key_id, ws, vals["rc"], vals["ts"]))
                         except Exception as e:
                             print(f"rate flush upsert failed (key={key_id}): {e}", flush=True)
+            cutoff = _time.time() - WINDOW_SECONDS
             if pending:
                 for key_id, ws, rc_delta, ts_delta in pending:
-                    try:
-                        conn.execute(upsert_sql, (key_id, ws, rc_delta, ts_delta))
-                    except Exception as e:
-                        print(f"rate flush pending failed (key={key_id}): {e}", flush=True)
+                    if ws > cutoff:
+                        try:
+                            conn.execute(upsert_sql, (key_id, ws, rc_delta, ts_delta))
+                        except Exception as e:
+                            print(f"rate flush pending failed (key={key_id}): {e}", flush=True)
             conn.execute(
                 "DELETE FROM rate_limits WHERE window_start < ?",
                 (_time.time() - 65.0,),
@@ -97,6 +99,8 @@ def reserve_rate(key_id, rpm_limit, tpm_limit, tokens_estimated):
         stale = [k for k in store if k <= window_start]
         for k in stale:
             del store[k]
+        # SQLite read under _thread_lock serializes the hot path.
+        # Acceptable at current scale; defer restructuring until needed.
         db = _get_connection(get_db_path())
         row = db.execute(_RATE_LIMITS_SQL, (key_id, window_start)).fetchone()
         effective_rc = row["rc"] + sum(v["rc"] for v in store.values())

@@ -37,7 +37,7 @@ def get_db():
 
 def resolve_routing(key_id: int, model_name: str) -> dict | None:
     """Resolve alias + find server for a given key. Returns server info or None."""
-    cache_key = f"{key_id}:{model_name}"
+    cache_key = model_name
     cached = get_cached_route(cache_key)
     if cached:
         return cached
