@@ -3,7 +3,14 @@
 import os
 from pathlib import Path
 
-ADMIN_KEY: str = os.environ.get("ADMIN_KEY", "")
+_ADMIN_KEY: str = os.environ.get("ADMIN_KEY", "")
+if not _ADMIN_KEY:
+    raise RuntimeError(
+        "ADMIN_KEY environment variable is required. "
+        "Set it to a secret value before starting the proxy, e.g. "
+        "ADMIN_KEY=$(python -c 'import secrets; print(secrets.token_urlsafe(24))')"
+    )
+ADMIN_KEY: str = _ADMIN_KEY
 PROXY_HOST: str = os.environ.get("PROXY_HOST", "0.0.0.0")
 PROXY_PORT: int = int(os.environ.get("PROXY_PORT", "8000"))
 HTTPX_TIMEOUT: float = float(os.environ.get("HTTPX_TIMEOUT", "120"))

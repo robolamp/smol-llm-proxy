@@ -258,19 +258,17 @@ All requests authenticated, routed, and logged via SQLite on every call (cold ca
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | +0ms | 100ms | 120ms | +20ms | 101ms | 103ms | +2ms | 49.3 | 48.3 | -1.0 |
-| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 100ms | 120ms | +20ms | 101ms | 104ms | +3ms | 194.7 | 190.7 | -4.0 |
-| High | 100+100 | 100ms | 110ms | +10ms | 110ms | 120ms | +10ms | 110ms | 140ms | +30ms | 102ms | 109ms | +7ms | 895.7 | 840.4 | -55.4 |
+| Low | 5+5 | 100ms | 100ms | +0ms | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 101ms | 104ms | +2ms | 49.1 | 48.1 | -1.0 |
+| Medium | 20+20 | 100ms | 100ms | +0ms | 100ms | 110ms | +10ms | 100ms | 110ms | +10ms | 102ms | 104ms | +2ms | 194.5 | 190.7 | -3.8 |
+| High | 100+100 | 100ms | 110ms | +10ms | 110ms | 110ms | +0ms | 110ms | 120ms | +10ms | 103ms | 106ms | +4ms | 893.7 | 864.7 | -29.0 |
 
 ### Real llama-server backend
 
 | Mode | Users | Direct P50 | Proxy P50 | Overhead P50 | Direct P95 | Proxy P95 | Overhead P95 | Direct P99 | Proxy P99 | Overhead P99 | Direct Mean | Through proxy | Overhead Mean | Direct RPS | Through proxy | RPS overhead |
 |------|-------|-----------|-----------|-------------|-----------|-----------|-------------|-----------|----------|-------------|------------|--------------|--------------|-----------|--------------|-------------|
-| Low | 5+5 | 580ms | 590ms | +10ms | ~1000ms | ~950ms | ~0ms | ~1100ms | ~1100ms | ~0ms | 623ms | 617ms | -6ms | 7.9 | 8.1 | +0.1 |
-| Medium | 20+20 | ~2300ms | ~2400ms | ~100ms | ~2700ms | ~2700ms | ~0ms | ~2900ms | ~2900ms | ~0ms | ~2302ms | ~2337ms | +35ms | 8.5 | 7.5 | -1.0 |
-| High | 100+100 | 13000ms | 13000ms | ~0ms | 14000ms | 14000ms | ~0ms | 14000ms | 14000ms | ~0ms | 10624ms | 10723ms | +98ms | 7.8 | 7.6 | -0.2 |
+| Low | 5+5 | 430ms | 430ms | +0ms | 760ms | 750ms | -10ms | 850ms | 870ms | +20ms | 460ms | 461ms | +1ms | 10.8 | 10.8 | 0.0 |
 
-Proxy overhead on clean conditions (mock): **~2–7ms** mean, **+0–30ms** P99 across all load levels with DB-backed rate limiter. Against real backend: **negligible at low/medium load** (~6–35ms mean), high load variance driven by upstream llama.cpp contention.
+Proxy overhead on clean conditions (mock): **~2–4ms** mean, **+0–10ms** P99 across all load levels with DB-backed rate limiter. Against real backend: **negligible at low load** (+1ms mean), higher load limited by SQLite I/O under concurrent bench runs.
 Run your own benchmarks: `python tests/benchmark/run.py [low|medium|high]` (add `--mock` for fixed-delay backend)
 
 ### Memory footprint
@@ -302,13 +300,17 @@ If you self-host several llama-server instances on one or more machines and want
 ## Architecture
 
 ```
-[users] ──HTTPS──> [proxy :port] ──HTTP──> [llama-server 1 :port]
-                        │                  [llama-server 2 :port]
-                        │                  [llama-server N :port]
-                        │
-                        ├── in-memory cache (keys, aliases, routes) — TTL 30s
-                        ├── validate API key + resolve routing (SQLite on first call, then cache)
-                        ├── rate limiter: read-only DB check + in-memory reservation with async batch flush (single-worker)
-                        ├── forward request via connection-pooled httpx client
-                        └── async log tokens + timings (background worker, no blocking)
+[users] ──HTTP──> [proxy :port] ──HTTP──> [llama-server 1 :port]
+                       │                  [llama-server 2 :port]
+                       │                  [llama-server N :port]
+                       │
+                       ├── in-memory cache (keys, routes) — TTL 30s
+                       ├── validate API key + resolve routing (SQLite on first call, then cache)
+                       ├── rate limiter: read-only DB check + in-memory reservation + reconcile on response
+                       ├── async batch flush to SQLite (1s interval)
+                       ├── forward request via connection-pooled httpx client
+                       ├── async usage logger (batch queue, 50 items / 1s timeout)
+                       └── retention cleanup (90-day purge, daily)
 ```
+
+> TLS termination is handled externally — Cloudflare, Caddy, nginx, or any reverse proxy in front of the proxy.
