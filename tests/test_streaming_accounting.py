@@ -50,6 +50,25 @@ def _mock_sse_with_usage():
     ]
 
 
+def _mock_sse_usage_and_timings_combined():
+    """llama-server final chunk: both usage and timings in the same SSE line."""
+    return [
+        b'data: {"id":"s1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"x"},"finish_reason":null}]}\n',
+        b'data: {"id":"s1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"timings":{"prompt_n":10,"predicted_n":20,"prompt_ms":100,"predicted_ms":200},"usage":{"prompt_tokens":10,"completion_tokens":20,"total_tokens":30}}\n',
+        b"data: [DONE]\n",
+    ]
+
+
+def _mock_sse_usage_twice():
+    """Usage sent in intermediate chunk and again in final chunk (cumulative)."""
+    return [
+        b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"a"},"finish_reason":null}]}\n',
+        b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{"content":"b"},"finish_reason":null}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":6}}\n',
+        b'data: {"id":"chatcmpl-1","object":"chat.completion.chunk","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3,"total_tokens":8}}\n',
+        b"data: [DONE]\n",
+    ]
+
+
 class TestParseSseChunk:
     def test_counts_delta_content(self):
         text = (
@@ -247,5 +266,95 @@ class TestStreamingWithUsageStillWorks:
         assert resp.status_code == 200
         assert len(captured) == 1
         # authoritative usage: prompt_tokens=5, completion_tokens=3
+        assert captured[0][4] == 5
+        assert captured[0][5] == 3
+
+
+class TestUsageAndTimingsCombined:
+    """llama-server final chunk contains both usage and timings — tokens counted once from usage."""
+
+    def test_combined_usage_timings_counts_once(self, server_with_model, admin_key, client):
+        chunks = _mock_sse_usage_and_timings_combined()
+
+        async def mock_aiter_bytes():
+            for chunk in chunks:
+                yield chunk
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aread = AsyncMock(return_value=b"")
+        mock_response.aclose = AsyncMock()
+
+        mock_client = Mock()
+        mock_client.build_request = Mock(return_value=Mock())
+        mock_client.send = AsyncMock(return_value=mock_response)
+
+        captured = []
+
+        def capture_enqueue(*args, **kwargs):
+            captured.append(args)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            with patch("smol_llm_proxy.proxy.enqueue_usage", side_effect=capture_enqueue):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "model": server_with_model["model_name"],
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+
+        assert resp.status_code == 200
+        assert len(captured) == 1
+        # usage is authoritative: prompt_tokens=10, completion_tokens=20
+        # timings.prompt_n=10 and predicted_n=20 must NOT be added again
+        assert captured[0][4] == 10
+        assert captured[0][5] == 20
+
+
+class TestUsageTwiceCumulative:
+    """Usage sent in intermediate and final chunk — last seen wins, no summation."""
+
+    def test_usage_twice_no_summation(self, server_with_model, admin_key, client):
+        chunks = _mock_sse_usage_twice()
+
+        async def mock_aiter_bytes():
+            for chunk in chunks:
+                yield chunk
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aread = AsyncMock(return_value=b"")
+        mock_response.aclose = AsyncMock()
+
+        mock_client = Mock()
+        mock_client.build_request = Mock(return_value=Mock())
+        mock_client.send = AsyncMock(return_value=mock_response)
+
+        captured = []
+
+        def capture_enqueue(*args, **kwargs):
+            captured.append(args)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            with patch("smol_llm_proxy.proxy.enqueue_usage", side_effect=capture_enqueue):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "model": server_with_model["model_name"],
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+
+        assert resp.status_code == 200
+        assert len(captured) == 1
+        # final cumulative usage: prompt_tokens=5, completion_tokens=3
+        # intermediate usage (completion_tokens=1) must NOT be summed
         assert captured[0][4] == 5
         assert captured[0][5] == 3

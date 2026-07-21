@@ -234,9 +234,23 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
 
 
 def _parse_sse_chunk(text):
-    """Parse SSE chunk: extract timings, usage, and delta count in one pass."""
-    total_p = total_c = delta_count = 0
+    """Parse SSE chunk: extract timings, usage, and delta count.
+
+    Usage token counts are authoritative. If any line in the chunk has a
+    non-empty usage dict with token counts, those values are used and
+    timings.prompt_n / timings.predicted_n are ignored for token counting.
+    Timings are still the only source of latency data (prompt_ms / predicted_ms).
+    When no usage is present, timings.prompt_n / predicted_n are used as fallback.
+
+    Token counts are last-seen-wins (no +=) because usage in OpenAI-compatible
+    streams is cumulative/final, not per-chunk delta.
+    """
+    delta_count = 0
     last_pm = last_pr = 0.0
+    last_usage_p = None
+    last_usage_c = None
+    fallback_p = 0
+    fallback_c = 0
     try:
         if isinstance(text, bytes):
             text = text.decode("utf-8", errors="replace")
@@ -257,14 +271,17 @@ def _parse_sse_chunk(text):
                 pn = timings.get("prompt_n", 0) or 0
                 cn = timings.get("predicted_n", 0) or 0
                 if pn > 0 or cn > 0:
-                    total_p += pn
-                    total_c += cn
-                    last_pm = timings.get("prompt_ms", 0.0) or 0.0
-                    last_pr = timings.get("predicted_ms", 0.0) or 0.0
+                    fallback_p = pn
+                    fallback_c = cn
+                last_pm = timings.get("prompt_ms", 0.0) or 0.0
+                last_pr = timings.get("predicted_ms", 0.0) or 0.0
             usage = data.get("usage", {})
-            if isinstance(usage, dict):
-                total_p += usage.get("prompt_tokens", 0)
-                total_c += usage.get("completion_tokens", 0)
+            if isinstance(usage, dict) and usage:
+                up = usage.get("prompt_tokens", 0)
+                uc = usage.get("completion_tokens", 0)
+                if up > 0 or uc > 0:
+                    last_usage_p = up
+                    last_usage_c = uc
             choices = data.get("choices", [])
             if isinstance(choices, list):
                 for ch in choices:
@@ -276,7 +293,9 @@ def _parse_sse_chunk(text):
                                 delta_count += len(content)
     except (UnicodeDecodeError, TypeError):
         pass
-    return total_p, total_c, delta_count, last_pm, last_pr
+    if last_usage_p is not None:
+        return last_usage_p, last_usage_c, delta_count, last_pm, last_pr
+    return fallback_p, fallback_c, delta_count, last_pm, last_pr
 
 
 async def proxy_public(body=b"", path="/v1/models"):
