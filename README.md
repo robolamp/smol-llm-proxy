@@ -12,13 +12,27 @@ Built for the case where you run multiple llama-server instances (different mode
 ## Features
 
 - Per-user API keys (create / delete / toggle active)
-- RPM/TPM rate limiting with in-memory counters + async batch flush to SQLite
-- Multi-server routing by model name with in-memory cache
-- Model aliases (`alias` -> `model-name.gguf`)
-- Token usage logging: prompt/completion tokens, timings
-- Streaming and non-streaming proxy support
-- Connection-pooled httpx client (keepalive connections to backends)
-- SQLite backend (zero external DB dependencies)
+- **Rate limiting** — per-key RPM/TPM, sliding 60-second window, 429 + `Retry-After` on exceed
+- **Multi-server routing** by model name with in-memory cache (TTL 30s)
+- **Model aliases** (`alias` -> `model-name.gguf`)
+- **Token usage logging** — prompt/completion tokens, timings, 90-day retention with daily purge
+- **Streaming and non-streaming** proxy support for chat, completions, and embeddings
+- **Connection-pooled httpx client** (keepalive connections to backends)
+- **SQLite backend** (zero external DB dependencies)
+
+## Dependencies
+
+| Package | Version | Notes |
+|---------|---------|-------|
+| `fastapi` | >= 0.115.0 | Web framework |
+| `uvicorn[standard]` | >= 0.30.0 | ASGI server |
+| `httpx` | >= 0.27.0 | Async HTTP client |
+| `pydantic` | >= 2.0.0 | Data validation |
+| `pyyaml` | >= 6.0 | Config parsing |
+| `orjson` | >= 3.9.0 | Fast JSON serialization |
+| `uvloop` | >= 0.19.0 | Linux/macOS only (`sys_platform != 'win32'`) |
+
+Optional dev dependencies: `pytest`, `pytest-rerunfailures`, `ruff` (see `pyproject.toml`).
 
 ## Quick Start
 
@@ -67,6 +81,22 @@ curl -sO https://raw.githubusercontent.com/robolamp/smol-llm-proxy/main/.env.exa
 curl -sO https://raw.githubusercontent.com/robolamp/smol-llm-proxy/main/config.example.yaml && cp config.example.yaml config.yaml
 ```
 
+### From source
+
+```bash
+git clone https://github.com/robolamp/smol-llm-proxy.git
+cd smol-llm-proxy
+pip install -e .
+```
+
+Copy example configs and run:
+
+```bash
+cp .env.example .env                # set ADMIN_KEY
+cp config.example.yaml config.yaml  # fill in your servers
+ADMIN_KEY=secret python -m smol_llm_proxy
+```
+
 ### Quick usage
 
 1. Create a user key:
@@ -112,15 +142,31 @@ aliases:
   alias: model-name.gguf     # short name -> real model name
 ```
 
+### Config sync semantics
+
+On startup, `config.yaml` is the **source of truth**:
+- Servers/aliases **not present** in `config.yaml` are **deleted** from the database.
+- Servers/aliases in the database **not present** in `config.yaml` are **deleted**.
+- Models listed under a server in YAML are synced; extra models on that server are removed.
+- API keys, usage logs, and rate limits are **not** affected by config sync.
+- The in-memory route cache is cleared after sync.
+
+This means if you remove a server or alias from `config.yaml` and restart, it will be gone from the database. If you want to keep something permanently, manage it via the Admin API (not YAML).
+
 ### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ADMIN_KEY` | required | Bearer token for `/admin/*` endpoints |
+| `ADMIN_KEY` | **required** | Bearer token for `/admin/*` endpoints. Startup fails without it. |
 | `PROXY_HOST` | `0.0.0.0` | Listen address |
 | `PROXY_PORT` | `8000` | Listen port |
 | `DB_PATH` | `data/proxy.db` | SQLite database location |
-| `CONFIG_PATH` | `./config.yaml` | Path to config file |
+| `CONFIG_PATH` | `config.yaml` | Path to YAML config file |
+| `HTTPX_TIMEOUT` | `120` | Upstream HTTP client timeout (seconds) |
+| `PROXY_MAX_CONNECTIONS` | `50` | httpx connection pool max size |
+| `PROXY_MAX_KEEPALIVE` | `20` | httpx keepalive pool max size |
+| `PROXY_KEEPALIVE_EXPIRY` | `30.0` | httpx keepalive expiry (seconds) |
+| `BENCH_COLD_CACHE` | *(unset)* | Set to `"1"` to disable in-memory caches (for benchmarking) |
 
 For `pip install`, set them in shell or via a `.env`-like loader. For Docker Compose, put them in `.env`:
 
@@ -143,19 +189,17 @@ All admin endpoints require `Authorization: Bearer <ADMIN_KEY>` header.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/admin/servers` | `GET` | List all registered servers |
-| `/admin/servers` | `POST` | Register a llama-server |
-| `/admin/servers/{id}` | `DELETE` / `PATCH` | Remove or update server |
-| `/admin/servers/{id}/models` | `POST` / `DELETE` | Assign/unassign model name |
-| `/admin/keys` | `GET` | List all API keys |
-| `/admin/keys` | `POST` | Create user key |
-| `/admin/keys/{key_id}` | `DELETE` | Revoke key (by integer id) |
-| `/admin/keys/{key_id}/toggle` | `PATCH` | Activate/deactivate key (by integer id) |
-| `/admin/keys/{key_id}/limits` | `PUT` | Set RPM/TPM rate limits for a key |
-| `/admin/aliases` | `GET` / `POST` | List or create model aliases |
+| `/admin/keys` | `GET` / `POST` | List API keys / Create user key |
+| `/admin/keys/{key_id}` | `DELETE` | Revoke key (integer id, not key string) |
+| `/admin/keys/{key_id}/toggle` | `PATCH` | Activate/deactivate key |
+| `/admin/keys/{key_id}/limits` | `PUT` | Set per-key RPM/TPM rate limits |
+| `/admin/servers` | `GET` / `POST` | List servers / Register a llama-server |
+| `/admin/servers/{server_id}` | `DELETE` / `PATCH` | Remove or update server |
+| `/admin/servers/{server_id}/models` | `POST` | Assign model to server (use `?reassign=true` to move from another server) |
+| `/admin/servers/{server_id}/models/{model_name}` | `DELETE` | Unassign model from server |
+| `/admin/aliases` | `GET` / `POST` | List aliases / Create alias |
 | `/admin/aliases/{alias_name}` | `PATCH` / `DELETE` | Update alias target / Delete alias |
-| `/admin/usage` | `GET` | View token usage logs |
-| `/admin/usage/summary` | `GET` | Usage summary grouped by alias (model_name) |
+| `/admin/usage` | `GET` | Token usage logs + summary (accepts `key_id`, `server_id`, `start_date`, `end_date`, `limit`, `offset`) |
 | `/admin/usage/summary/real` | `GET` | Usage summary grouped by real model name + server |
 
 **Note:** Key operations (`DELETE`, `PATCH /toggle`, `PUT /limits`) use integer `key_id` from the database, not the API key string itself.
@@ -209,13 +253,6 @@ curl "http://localhost:8000/admin/usage?key_id=1&start_date=2024-01-01T00:00:00&
   -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
-Usage summary grouped by alias (what the client called):
-
-```bash
-curl "http://localhost:8000/admin/usage/summary?key_id=1&start_date=2024-01-01T00:00:00&end_date=2024-01-31T23:59:59" \
-  -H "Authorization: Bearer $ADMIN_KEY"
-```
-
 Usage summary grouped by real model name + server (aggregates across all aliases):
 
 ```bash
@@ -223,7 +260,7 @@ curl "http://localhost:8000/admin/usage/summary/real?key_id=1&start_date=2024-01
   -H "Authorization: Bearer $ADMIN_KEY"
 ```
 
-All three endpoints accept: `key_id`, `server_id`, `start_date` (ISO 8601), `end_date` (ISO 8601), `limit`, `offset`. Usage logs are preserved even after a server or key is deleted.
+All endpoints accept: `key_id`, `server_id`, `start_date` (ISO 8601), `end_date` (ISO 8601), `limit`, `offset`. Usage logs are preserved even after a server or key is deleted.
 
 ## Proxy Endpoints
 
@@ -234,7 +271,7 @@ These forward to llama-server backends based on model name routing.
 | `/v1/chat/completions` | `POST` | Chat completions (streaming + non-streaming) |
 | `/v1/completions` | `POST` | Legacy completions |
 | `/v1/embeddings` | `POST` | Embeddings |
-| `/v1/models` | `GET` | List available models (requires user API key — fans out to all backends) |
+| `/v1/models` | `GET` | List available models (requires user API key — returns 401 without Authorization, 403 for invalid/inactive key, fans out to all backends) |
 | `/health` | `GET` | Health check (no auth required) |
 
 ## Usage Logs
