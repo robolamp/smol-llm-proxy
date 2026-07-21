@@ -109,7 +109,9 @@ async def admin_update_server(server_id: int, request: Request, authorization: s
     if not fields:
         raise HTTPException(status_code=400, detail="No fields to update")
     with get_db() as conn:
-        conn.execute(f"UPDATE servers SET {', '.join(fields)} WHERE id = ?", params)
+        cursor = conn.execute(f"UPDATE servers SET {', '.join(fields)} WHERE id = ?", params)
+    if cursor.rowcount == 0:
+        raise HTTPException(status_code=404, detail="Server not found")
     clear_route_cache()
     return {"ok": True}
 

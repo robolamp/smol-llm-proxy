@@ -46,6 +46,15 @@ class TestAdminServers:
         resp = client.delete("/admin/servers/99999", headers={"Authorization": "Bearer test-admin-key"})
         assert resp.status_code == 404
 
+        # Update nonexistent → 404
+        resp = client.patch(
+            "/admin/servers/99999",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"url": "http://127.0.0.1:9090"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Server not found"
+
 
 class TestAdminModels:
     def test_assign_and_unassign(self, server_setup, client):
