@@ -126,6 +126,7 @@ async def admin_assign_model(
     model_name = data.get("model_name", "")
     if not model_name:
         raise HTTPException(status_code=400, detail="model_name is required")
+    reassign_flag = (reassign or "").strip().lower() in ("1", "true", "yes")
     with get_db() as conn:
         existing = conn.execute(
             "SELECT sm.server_id, s.name FROM server_models sm JOIN servers s ON s.id = sm.server_id WHERE sm.model_name = ?",
@@ -134,16 +135,18 @@ async def admin_assign_model(
         if existing:
             existing_server_id = existing["server_id"]
             existing_server_name = existing["name"]
-            if existing_server_id != server_id and (reassign or reassign == "true"):
+            if existing_server_id == server_id:
+                pass
+            elif not reassign_flag:
+                raise HTTPException(
+                    status_code=409,
+                    detail=f"Model '{model_name}' already assigned to server '{existing_server_name}' (id={existing_server_id}). Use ?reassign=true to move.",
+                )
+            else:
                 conn.execute("DELETE FROM server_models WHERE model_name = ?", (model_name,))
                 conn.execute(
                     "INSERT INTO server_models (server_id, model_name) VALUES (?, ?)",
                     (server_id, model_name),
-                )
-            else:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Model '{model_name}' already assigned to server '{existing_server_name}' (id={existing_server_id}). Use ?reassign=true to move.",
                 )
         else:
             try:

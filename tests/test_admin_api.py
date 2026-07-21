@@ -309,3 +309,163 @@ class TestAdminUsageLogsLeftJoin:
         logs = resp.json()["logs"]
         assert len(logs) >= 1
         assert any(log["model_name"] == model for log in logs)
+
+
+class TestAdminReassignSemantics:
+    def test_reassign_false_on_different_server_returns_409(self, client):
+        """?reassign=false on a model owned by another server → 409, no reassignment."""
+        import uuid
+
+        uid = uuid.uuid4().hex[:8]
+        # Create server A
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-a-{uid}", "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 200
+        srv_a_id = resp.json()["id"]
+
+        # Create server B
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-b-{uid}", "url": "http://127.0.0.1:8081"},
+        )
+        assert resp.status_code == 200
+        srv_b_id = resp.json()["id"]
+
+        # Assign model to server A
+        model = f"reassign-test-model-{uid}.gguf"
+        resp = client.post(
+            f"/admin/servers/{srv_a_id}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+        # Try to assign to server B with ?reassign=false → 409
+        resp = client.post(
+            f"/admin/servers/{srv_b_id}/models?reassign=false",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 409
+        assert "already assigned" in resp.json()["detail"].lower()
+
+    def test_reassign_true_moves_model(self, client):
+        """?reassign=true → model moved to new server."""
+        import uuid
+
+        uid = uuid.uuid4().hex[:8]
+        # Create server A
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-a-{uid}", "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 200
+        srv_a_id = resp.json()["id"]
+
+        # Create server B
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-b-{uid}", "url": "http://127.0.0.1:8081"},
+        )
+        assert resp.status_code == 200
+        srv_b_id = resp.json()["id"]
+
+        # Assign model to server A
+        model = f"reassign-move-model-{uid}.gguf"
+        resp = client.post(
+            f"/admin/servers/{srv_a_id}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+        # Reassign to server B with ?reassign=true → 200
+        resp = client.post(
+            f"/admin/servers/{srv_b_id}/models?reassign=true",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+    def test_reassign_to_same_server_is_idempotent(self, client):
+        """Re-assigning model to same server → 200 {\"ok\": true}."""
+        import uuid
+
+        uid = uuid.uuid4().hex[:8]
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-idem-{uid}", "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 200
+        srv_id = resp.json()["id"]
+
+        model = f"idem-model-{uid}.gguf"
+        # First assignment
+        resp = client.post(
+            f"/admin/servers/{srv_id}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+        # Re-assign to same server → should succeed idempotently
+        resp = client.post(
+            f"/admin/servers/{srv_id}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+        # Re-assign with ?reassign=true to same server → also succeeds
+        resp = client.post(
+            f"/admin/servers/{srv_id}/models?reassign=true",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+        assert resp.json() == {"ok": True}
+
+    def test_reassign_empty_string_is_false(self, client):
+        """?reassign= (empty string) should be treated as False."""
+        import uuid
+
+        uid = uuid.uuid4().hex[:8]
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-empty-{uid}", "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 200
+        srv_a_id = resp.json()["id"]
+
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": f"srv-empty2-{uid}", "url": "http://127.0.0.1:8081"},
+        )
+        assert resp.status_code == 200
+        srv_b_id = resp.json()["id"]
+
+        model = f"empty-reassign-model-{uid}.gguf"
+        resp = client.post(
+            f"/admin/servers/{srv_a_id}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+        # Empty reassign → 409
+        resp = client.post(
+            f"/admin/servers/{srv_b_id}/models?reassign=",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 409
