@@ -16,6 +16,21 @@ from .metrics import enqueue_usage
 _httpx_client: httpx.AsyncClient | None = None
 
 
+async def _validate_api_key(request):
+    user_key = _extract_user_key(request.headers.get("authorization"))
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    key_hash = _hash_key(user_key)
+    cached_key = get_cached_key(key_hash)
+    if cached_key:
+        key_info = cached_key
+    else:
+        key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
+    if not key_info or not key_info.get("active"):
+        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+    return key_info
+
+
 def get_httpx_client() -> httpx.AsyncClient:
     """Get or create the shared async HTTP client with connection pooling."""
     global _httpx_client
@@ -101,9 +116,7 @@ async def _check_rate_limit(key_info, body_json):
 
 
 async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None):
-    user_key = _extract_user_key(request.headers.get("authorization"))
-    if not user_key:
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    key_info = await _validate_api_key(request)
     if body_bytes is None:
         body_bytes = await request.body()
     if body_json is None:
@@ -112,14 +125,6 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
         except orjson.JSONDecodeError:
             raise HTTPException(status_code=400, detail="Invalid JSON body")
     model_name = body_json.get("model", "")
-    key_hash = _hash_key(user_key)
-    cached_key = get_cached_key(key_hash)
-    if cached_key:
-        key_info = cached_key
-    else:
-        key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
-    if not key_info or not key_info.get("active"):
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
     routing = await asyncio.to_thread(resolve_routing, key_info["id"], model_name)
     real_model_name = routing["real_model"] if routing else model_name
     display_name = model_name
@@ -132,7 +137,7 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
 
 
 _HOP_BY_HOP = frozenset(
-    ("host", "authorization", "content-length", "transfer-encoding", "connection", "keep-alive", "te", "upgrade")
+    "host authorization content-length transfer-encoding connection keep-alive te upgrade".split()
 )
 
 
@@ -150,8 +155,15 @@ async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
         request, path, body_bytes=body_bytes, body_json=body_json
     )
     server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
-    target_url, upstream_headers = _build_upstream(server, request, path)
-    return key_info, routing, display_name, real_model_name, body_json, body_bytes, target_url, upstream_headers
+    return (
+        key_info,
+        routing,
+        display_name,
+        real_model_name,
+        body_json,
+        body_bytes,
+        *(_build_upstream(server, request, path)),
+    )
 
 
 async def _check_and_setup(request, path, *, body_bytes=None, body_json=None):
@@ -190,8 +202,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
     if isinstance(result, JSONResponse):
         return result
     ki, rt, dn, rm, bj, bb, tu, uh, aw = result
-    tp = tc = 0
-    lpm = lpr = 0.0
+    tp, tc, lpm, lpr = 0, 0, 0.0, 0.0
     et = _estimate_input_tokens(bj)
     client = get_httpx_client()
     request_obj = client.build_request("POST", tu, headers=uh, content=bb)
@@ -249,16 +260,12 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
 
 
 def _parse_sse_chunk(text):
-    """Parse SSE chunk: extract timings, usage, and delta count.
-    Usage token counts are authoritative; timings.prompt_n/predicted_n are fallback.
-    Token counts are last-seen-wins (cumulative/final, not per-chunk delta).
-    """
+    """Parse SSE chunk: extract timings, usage, and delta count."""
     delta_count = 0
     last_pm = last_pr = 0.0
     last_usage_p = None
     last_usage_c = None
-    fallback_p = 0
-    fallback_c = 0
+    fallback_p = fallback_c = 0
     try:
         if isinstance(text, bytes):
             text = text.decode("utf-8", errors="replace")
@@ -279,8 +286,7 @@ def _parse_sse_chunk(text):
                 pn = timings.get("prompt_n", 0) or 0
                 cn = timings.get("predicted_n", 0) or 0
                 if pn > 0 or cn > 0:
-                    fallback_p = pn
-                    fallback_c = cn
+                    fallback_p, fallback_c = pn, cn
                 last_pm = timings.get("prompt_ms", 0.0) or 0.0
                 last_pr = timings.get("predicted_ms", 0.0) or 0.0
             usage = data.get("usage", {})
@@ -288,17 +294,12 @@ def _parse_sse_chunk(text):
                 up = usage.get("prompt_tokens", 0)
                 uc = usage.get("completion_tokens", 0)
                 if up > 0 or uc > 0:
-                    last_usage_p = up
-                    last_usage_c = uc
-            choices = data.get("choices", [])
-            if isinstance(choices, list):
-                for ch in choices:
-                    if isinstance(ch, dict):
-                        delta = ch.get("delta", {})
-                        if isinstance(delta, dict):
-                            content = delta.get("content")
-                            if isinstance(content, str) and content:
-                                delta_count += len(content)
+                    last_usage_p, last_usage_c = up, uc
+            for ch in data.get("choices", []):
+                if isinstance(ch, dict) and isinstance(ch.get("delta"), dict):
+                    content = ch["delta"].get("content")
+                    if isinstance(content, str) and content:
+                        delta_count += len(content)
     except (UnicodeDecodeError, TypeError):
         pass
     if last_usage_p is not None:
@@ -307,17 +308,7 @@ def _parse_sse_chunk(text):
 
 
 async def proxy_models(request):
-    user_key = _extract_user_key(request.headers.get("authorization"))
-    if not user_key:
-        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
-    key_hash = _hash_key(user_key)
-    cached_key = get_cached_key(key_hash)
-    if cached_key:
-        key_info = cached_key
-    else:
-        key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
-    if not key_info or not key_info.get("active"):
-        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+    await _validate_api_key(request)
 
     with get_db() as conn:
         rows = conn.execute("SELECT url, id FROM servers WHERE active = 1").fetchall()

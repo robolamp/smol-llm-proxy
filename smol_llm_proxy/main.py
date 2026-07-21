@@ -1,10 +1,11 @@
+import asyncio
 import os
 import secrets
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException, Query
 from fastapi.responses import Response
 import orjson
-from smol_llm_proxy.config import ADMIN_KEY, PROXY_HOST, PROXY_PORT
+from smol_llm_proxy.config import ADMIN_KEY
 from smol_llm_proxy.database import init_db, get_db
 from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_models
 from smol_llm_proxy.cache import clear_route_cache, clear_key_cache, set_bench_cold
@@ -135,27 +136,17 @@ async def admin_assign_model(
             (model_name,),
         ).fetchone()
         if existing:
-            existing_server_id = existing["server_id"]
-            existing_server_name = existing["name"]
-            if existing_server_id == server_id:
-                pass
-            elif not reassign_flag:
-                raise HTTPException(
-                    status_code=409,
-                    detail=f"Model '{model_name}' already assigned to server '{existing_server_name}' (id={existing_server_id}). Use ?reassign=true to move.",
-                )
-            else:
+            if existing["server_id"] != server_id:
+                if not reassign_flag:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=f"Model '{model_name}' already assigned to server '{existing['name']}' (id={existing['server_id']}). Use ?reassign=true to move.",
+                    )
                 conn.execute("DELETE FROM server_models WHERE model_name = ?", (model_name,))
-                conn.execute(
-                    "INSERT INTO server_models (server_id, model_name) VALUES (?, ?)",
-                    (server_id, model_name),
-                )
+                conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (server_id, model_name))
         else:
             try:
-                conn.execute(
-                    "INSERT INTO server_models (server_id, model_name) VALUES (?, ?)",
-                    (server_id, model_name),
-                )
+                conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (server_id, model_name))
             except Exception:
                 raise HTTPException(status_code=409, detail="Model already assigned to this server")
     clear_route_cache()
@@ -287,8 +278,8 @@ async def admin_get_usage(request: Request, authorization: str | None = Header(N
     _check_admin(authorization)
     from smol_llm_proxy.metrics import get_usage_logs, get_usage_summary
 
-    filters = _parse_usage_filters(request)
-    return {"logs": get_usage_logs(**filters, limit=100, offset=0), "summary": get_usage_summary(**filters)}
+    f = _parse_usage_filters(request)
+    return {"logs": get_usage_logs(**f, limit=100, offset=0), "summary": get_usage_summary(**f)}
 
 
 @app.get("/admin/usage/summary/real")
@@ -327,22 +318,12 @@ async def get_models(request: Request):
 @app.get("/health")
 async def health():
     try:
-        import asyncio
-
         cnt = await asyncio.to_thread(_health_sync)
         return {"status": "ok", "active_servers": cnt}
     except Exception:
-        print("health check failed", flush=True)
         return Response(content='{"status":"error"}', media_type="application/json", status_code=503)
 
 
 def _health_sync():
     with get_db() as conn:
         return conn.execute("SELECT COUNT(*) as cnt FROM servers WHERE active = 1").fetchone()["cnt"]
-
-
-if __name__ == "__main__":
-    import sys
-    import uvicorn
-
-    uvicorn.run(app, host=PROXY_HOST, port=PROXY_PORT, loop="uvloop" if sys.platform != "win32" else "asyncio")

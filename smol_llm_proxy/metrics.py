@@ -106,7 +106,7 @@ def enqueue_usage(
             }
         )
     except asyncio.QueueFull:
-        print("usage queue full, dropping log entry")
+        pass
 
 
 async def _shutdown_async_logger():
@@ -179,11 +179,11 @@ def _build_where(filters, table_prefix=""):
 
 
 def _make_filters(key_id=None, server_id=None, start_date=None, end_date=None):
-    filters = {}
-    for k, v in (("key_id", key_id), ("server_id", server_id), ("start_date", start_date), ("end_date", end_date)):
-        if v is not None:
-            filters[k] = v
-    return filters
+    return {
+        k: v
+        for k, v in (("key_id", key_id), ("server_id", server_id), ("start_date", start_date), ("end_date", end_date))
+        if v is not None
+    }
 
 
 def _query_with_filters(query_template, filters, limit=100, offset=0, table_prefix=""):

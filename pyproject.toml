@@ -50,6 +50,7 @@ smol_llm_proxy = [".env.example", "config.example.yaml", "entrypoint.sh"]
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+exclude = ["smol_llm_proxy/proxy.py"]
 
 [tool.pytest.ini_options]
 markers = [
