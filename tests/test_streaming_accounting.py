@@ -358,3 +358,172 @@ class TestUsageTwiceCumulative:
         # intermediate usage (completion_tokens=1) must NOT be summed
         assert captured[0][4] == 5
         assert captured[0][5] == 3
+
+
+def _mock_sse_usage_split_two():
+    """Final usage data: {...usage...} split across two byte chunks.
+
+    The JSON payload is cut mid-key so that a single SSE line spans two
+    aiter_bytes() yields.  No trailing \\n on the first chunk.
+    """
+    full_line = b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n'
+    mid = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens')
+    return [full_line[:mid], full_line[mid:]]
+
+
+def _mock_sse_usage_split_three():
+    """Final usage data split across three byte chunks."""
+    full_line = b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n'
+    mid1 = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"')
+    mid2 = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens')
+    return [full_line[:mid1], full_line[mid1:mid2], full_line[mid2:]]
+
+
+def _mock_sse_usage_split_three_simple():
+    """Simpler three-way split: cut the usage line at two arbitrary points."""
+    full_line = b'data: {"usage":{"prompt_tokens":3,"completion_tokens":2}}\n'
+    return [
+        full_line[:10],
+        full_line[10:30],
+        full_line[30:],
+    ]
+
+
+def _mock_sse_multibyte_utf8_split():
+    """UTF-8 multi-byte character split across two byte chunks.
+
+    'é' is 0xC3 0xA9 in UTF-8.  We split right between the two bytes.
+    """
+    return [
+        b'data: {"choices":[{"delta":{"content":"caf"}}]',
+        b'\xe9, "stop"}]\ndata: [DONE]\n',
+    ]
+
+
+class TestStreamingUsageSplitTwoChunks:
+    """Final usage data split across two byte chunks — usage still recorded."""
+
+    def test_usage_split_two_chunks(self, server_with_model, admin_key, client):
+        chunks = _mock_sse_usage_split_two()
+
+        async def mock_aiter_bytes():
+            for chunk in chunks:
+                yield chunk
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aread = AsyncMock(return_value=b"")
+        mock_response.aclose = AsyncMock()
+
+        mock_client = Mock()
+        mock_client.build_request = Mock(return_value=Mock())
+        mock_client.send = AsyncMock(return_value=mock_response)
+
+        captured = []
+
+        def capture_enqueue(*args, **kwargs):
+            captured.append(args)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            with patch("smol_llm_proxy.proxy.enqueue_usage", side_effect=capture_enqueue):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "model": server_with_model["model_name"],
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+
+        assert resp.status_code == 200
+        assert len(captured) == 1
+        assert captured[0][4] == 12
+        assert captured[0][5] == 7
+
+
+class TestStreamingUsageSplitThreeChunks:
+    """Final usage data split across three byte chunks — usage still recorded."""
+
+    def test_usage_split_three_chunks(self, server_with_model, admin_key, client):
+        chunks = _mock_sse_usage_split_three_simple()
+
+        async def mock_aiter_bytes():
+            for chunk in chunks:
+                yield chunk
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aread = AsyncMock(return_value=b"")
+        mock_response.aclose = AsyncMock()
+
+        mock_client = Mock()
+        mock_client.build_request = Mock(return_value=Mock())
+        mock_client.send = AsyncMock(return_value=mock_response)
+
+        captured = []
+
+        def capture_enqueue(*args, **kwargs):
+            captured.append(args)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            with patch("smol_llm_proxy.proxy.enqueue_usage", side_effect=capture_enqueue):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "model": server_with_model["model_name"],
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+
+        assert resp.status_code == 200
+        assert len(captured) == 1
+        assert captured[0][4] == 3
+        assert captured[0][5] == 2
+
+
+class TestStreamingMultibyteUtf8Split:
+    """Multi-byte UTF-8 character split across chunks — no crash, content intact."""
+
+    def test_multibyte_utf8_no_crash(self, server_with_model, admin_key, client):
+        chunks = _mock_sse_multibyte_utf8_split()
+
+        async def mock_aiter_bytes():
+            for chunk in chunks:
+                yield chunk
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.aiter_bytes = mock_aiter_bytes
+        mock_response.aread = AsyncMock(return_value=b"")
+        mock_response.aclose = AsyncMock()
+
+        mock_client = Mock()
+        mock_client.build_request = Mock(return_value=Mock())
+        mock_client.send = AsyncMock(return_value=mock_response)
+
+        captured = []
+
+        def capture_enqueue(*args, **kwargs):
+            captured.append(args)
+
+        with patch("smol_llm_proxy.proxy.get_httpx_client", new=Mock(return_value=mock_client)):
+            with patch("smol_llm_proxy.proxy.enqueue_usage", side_effect=capture_enqueue):
+                resp = client.post(
+                    "/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {admin_key}"},
+                    json={
+                        "model": server_with_model["model_name"],
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "stream": True,
+                    },
+                )
+
+        assert resp.status_code == 200
+        # Content byte 'é' may be replaced by \ufffd but must not crash
+        assert b"caf" in resp.content
+        assert len(captured) == 1

@@ -1,6 +1,7 @@
 """Proxy logic: route by model name and forward to llama-server."""
 
 import asyncio
+import codecs
 import httpx
 import orjson
 from fastapi import HTTPException
@@ -203,30 +204,44 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
         await resp.aclose()
         return Response(bb, resp.status_code, media_type="application/json")
 
+    _dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    _buf = b""
+    _seen = [0]
+
     async def generate():
-        nonlocal tp, tc, lpm, lpr
-        seen = 0
+        nonlocal tp, tc, lpm, lpr, _buf
+        _seen[0] = 0
+
+        def _account(lines):
+            nonlocal tp, tc, lpm, lpr
+            for ln in lines:
+                try:
+                    p, c, dc, pm, pr = _parse_sse_chunk(ln)
+                except (TypeError,):
+                    p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
+                if p > 0 or c > 0:
+                    tp, tc = p, c
+                _seen[0] += dc
+                if pm > 0 or pr > 0:
+                    lpm, lpr = pm, pr
+
         try:
             async for chunk in resp.aiter_bytes():
                 if not chunk:
                     continue
-                try:
-                    text = chunk.decode("utf-8")
-                    p, c, dc, pm, pr = _parse_sse_chunk(text)
-                except (UnicodeDecodeError, TypeError):
-                    p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
-                if p > 0 or c > 0:
-                    tp = p
-                    tc = c
-                seen += dc
-                if pm > 0 or pr > 0:
-                    lpm = pm
-                    lpr = pr
+                _buf += chunk
+                idx = _buf.rfind(b"\n")
+                if idx >= 0:
+                    _account(_dec.decode(_buf[: idx + 1], final=False).splitlines())
+                    _buf = _buf[idx + 1:]
                 yield chunk
+            if _buf:
+                _account(_dec.decode(_buf, final=True).splitlines())
+                _buf = b""
         finally:
             await resp.aclose()
             if not (tp or tc):
-                tp, tc = et, seen
+                tp, tc = et, _seen[0]
             reconcile_rate(ki["id"], tp + tc, aw, et)
             enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr, ki["name"], rt.get("server_name", ""))
 
