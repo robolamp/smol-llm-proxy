@@ -79,7 +79,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS rate_limits (id INTEGER PRIMARY KEY AUTOINCREMENT, key_id INTEGER NOT NULL REFERENCES api_keys(id) ON DELETE CASCADE, window_start REAL NOT NULL, request_count INTEGER NOT NULL DEFAULT 0, token_sum INTEGER NOT NULL DEFAULT 0);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_rate_limits_key_window ON rate_limits(key_id, window_start);
         """)
-    # Migration for existing databases: add rate limit columns if missing
+    # Migration: add rate limit columns if missing
     try:
         with get_db() as conn:
             conn.execute("ALTER TABLE api_keys ADD COLUMN rpm_limit INTEGER NOT NULL DEFAULT 100")
@@ -106,7 +106,6 @@ def init_db():
                 "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_server_models_model'"
             ).fetchone()
             if old_unique and "UNIQUE" in old_unique["sql"]:
-                # Has duplicates — clean them: keep max(id) per model_name
                 conn.execute(
                     "DELETE FROM server_models WHERE id NOT IN ("
                     "  SELECT MAX(id) FROM server_models GROUP BY model_name)"
@@ -115,7 +114,7 @@ def init_db():
                 conn.execute("CREATE UNIQUE INDEX idx_server_models_model ON server_models(model_name)")
     except Exception:
         pass
-    # Migration: denormalize key_name / server_name in usage_logs for billing attribution
+    # Migration: denormalize key_name / server_name in usage_logs
     try:
         with get_db() as conn:
             cols = {r["name"] for r in conn.execute("PRAGMA table_info(usage_logs)").fetchall()}

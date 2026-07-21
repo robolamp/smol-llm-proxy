@@ -234,7 +234,7 @@ These forward to llama-server backends based on model name routing.
 | `/v1/chat/completions` | `POST` | Chat completions (streaming + non-streaming) |
 | `/v1/completions` | `POST` | Legacy completions |
 | `/v1/embeddings` | `POST` | Embeddings |
-| `/v1/models` | `GET` | List available models (no auth required — fans out to all backends) |
+| `/v1/models` | `GET` | List available models (requires user API key — fans out to all backends) |
 | `/health` | `GET` | Health check (no auth required) |
 
 ## Usage Logs

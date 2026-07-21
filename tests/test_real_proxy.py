@@ -363,10 +363,25 @@ class TestProxyEndpoints:
         resp = client.post("/v1/embeddings", json={"input": "test"})
         assert resp.status_code == 401
 
-    def test_models_endpoint(self, client):
-        # This endpoint doesn't require auth but needs active servers
+    def test_models_no_auth(self, client):
         resp = client.get("/v1/models")
-        # Should return 200 with models list or 503 if no servers connected
+        assert resp.status_code == 401
+
+    def test_models_with_invalid_key(self, client):
+        resp = client.get("/v1/models", headers={"Authorization": "Bearer invalid-key"})
+        assert resp.status_code == 403
+
+    def test_models_with_auth(self, client):
+        # Create a valid key first
+        create_resp = client.post(
+            "/admin/keys",
+            headers={"Authorization": f"Bearer {ADMIN_KEY}"},
+            json={"name": "models-test"},
+        )
+        user_key = create_resp.json()["key"]
+
+        resp = client.get("/v1/models", headers={"Authorization": f"Bearer {user_key}"})
+        # Returns 200 with empty list or 503 if no backends reachable
         assert resp.status_code in [200, 503]
 
 

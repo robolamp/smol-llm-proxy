@@ -1,12 +1,11 @@
-import os
-import orjson
-import secrets
+import os, secrets
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException, Query
 from fastapi.responses import Response
+import orjson
 from smol_llm_proxy.config import ADMIN_KEY, PROXY_HOST, PROXY_PORT
 from smol_llm_proxy.database import init_db, get_db
-from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_public
+from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_models
 from smol_llm_proxy.cache import clear_route_cache, clear_key_cache, set_bench_cold
 from smol_llm_proxy.auth import create_api_key, delete_api_key, toggle_api_key, list_api_keys
 
@@ -14,11 +13,9 @@ set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
 
 def _parse_usage_filters(request):
-    return {
-        k: (int(v) if k in ("key_id", "server_id") else v)
-        for k in ("key_id", "server_id", "start_date", "end_date")
-        if (v := request.query_params.get(k)) is not None
-    }
+    return {k: (int(v) if k in ("key_id", "server_id") else v)
+              for k in ("key_id", "server_id", "start_date", "end_date")
+              if (v := request.query_params.get(k)) is not None}
 
 
 async def _read_json_body(request: Request):
@@ -31,11 +28,11 @@ async def _read_json_body(request: Request):
 
 @asynccontextmanager
 async def lifespan(app):
-    init_db()
     from smol_llm_proxy.config_loader import sync_config
     from smol_llm_proxy.rate_limiter import start_rate_flush
     from smol_llm_proxy.metrics import start_retention_cleanup
 
+    init_db()
     sync_config()
     start_rate_flush()
     start_retention_cleanup()
@@ -320,8 +317,8 @@ async def proxy_embeddings(request: Request):
 
 
 @app.get("/v1/models")
-async def proxy_models():
-    return await proxy_public(b"")
+async def get_models(request: Request):
+    return await proxy_models(request)
 
 
 @app.get("/health")

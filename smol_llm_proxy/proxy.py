@@ -250,15 +250,8 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
 
 def _parse_sse_chunk(text):
     """Parse SSE chunk: extract timings, usage, and delta count.
-
-    Usage token counts are authoritative. If any line in the chunk has a
-    non-empty usage dict with token counts, those values are used and
-    timings.prompt_n / timings.predicted_n are ignored for token counting.
-    Timings are still the only source of latency data (prompt_ms / predicted_ms).
-    When no usage is present, timings.prompt_n / predicted_n are used as fallback.
-
-    Token counts are last-seen-wins (no +=) because usage in OpenAI-compatible
-    streams is cumulative/final, not per-chunk delta.
+    Usage token counts are authoritative; timings.prompt_n/predicted_n are fallback.
+    Token counts are last-seen-wins (cumulative/final, not per-chunk delta).
     """
     delta_count = 0
     last_pm = last_pr = 0.0
@@ -313,7 +306,19 @@ def _parse_sse_chunk(text):
     return fallback_p, fallback_c, delta_count, last_pm, last_pr
 
 
-async def proxy_public(body=b"", path="/v1/models"):
+async def proxy_models(request):
+    user_key = _extract_user_key(request.headers.get("authorization"))
+    if not user_key:
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    key_hash = _hash_key(user_key)
+    cached_key = get_cached_key(key_hash)
+    if cached_key:
+        key_info = cached_key
+    else:
+        key_info = await asyncio.to_thread(_find_key_info_sync, user_key)
+    if not key_info or not key_info.get("active"):
+        raise HTTPException(status_code=403, detail="Invalid or inactive API key")
+
     with get_db() as conn:
         rows = conn.execute("SELECT url, id FROM servers WHERE active = 1").fetchall()
     if not rows:
@@ -321,7 +326,7 @@ async def proxy_public(body=b"", path="/v1/models"):
 
     async def _fetch(row):
         try:
-            _, rb = await _forward_request(_format_server_url(row["url"], path), {}, body, "GET")
+            _, rb = await _forward_request(_format_server_url(row["url"], "/v1/models"), {}, b"", "GET")
             data = orjson.loads(rb)
             if "data" in data:
                 return data["data"]

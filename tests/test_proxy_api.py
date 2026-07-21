@@ -192,6 +192,36 @@ class TestForwardRequestMethod:
         assert call_kwargs.kwargs["method"] == "POST"
 
 
+class TestModelsEndpoint:
+    def test_models_no_auth(self, client):
+        resp = client.get("/v1/models")
+        assert resp.status_code == 401
+
+    def test_models_invalid_key(self, client):
+        resp = client.get("/v1/models", headers={"Authorization": "Bearer sk-invalid"})
+        assert resp.status_code == 403
+
+    def test_models_inactive_key(self, client, admin_key):
+        from smol_llm_proxy.auth import toggle_api_key, list_api_keys
+
+        key_id = [k for k in list_api_keys() if k["name"] == "test-user"][0]["id"]
+        toggle_api_key(key_id, False)
+        resp = client.get("/v1/models", headers={"Authorization": f"Bearer {admin_key}"})
+        assert resp.status_code == 403
+
+    def test_models_valid_key(self, server_with_model, admin_key, client):
+        mock_data = {"object": "list", "data": [{"id": server_with_model["model_name"], "object": "model"}]}
+        with patch(
+            "smol_llm_proxy.proxy._forward_request",
+            new=AsyncMock(return_value=(200, json.dumps(mock_data).encode())),
+        ):
+            resp = client.get("/v1/models", headers={"Authorization": f"Bearer {admin_key}"})
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["object"] == "list"
+        assert isinstance(data["data"], list)
+
+
 class TestProxyHelpers:
     def test_extract_key(self):
         from smol_llm_proxy.proxy import _extract_user_key

@@ -16,7 +16,6 @@ _RATE_LIMITS_SQL = "SELECT COALESCE(SUM(request_count), 0) as rc, COALESCE(SUM(t
 
 
 def _flush_to_db_sync(data, pending=None):
-    """Flush rate store snapshot and pending deltas to DB. Must NOT be called under _thread_lock."""
     upsert_sql = (
         "INSERT INTO rate_limits (key_id, window_start,"
         " request_count, token_sum)"
