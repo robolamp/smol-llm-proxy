@@ -233,7 +233,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
                 idx = _buf.rfind(b"\n")
                 if idx >= 0:
                     _account(_dec.decode(_buf[: idx + 1], final=False).splitlines())
-                    _buf = _buf[idx + 1:]
+                    _buf = _buf[idx + 1 :]
                 yield chunk
             if _buf:
                 _account(_dec.decode(_buf, final=True).splitlines())

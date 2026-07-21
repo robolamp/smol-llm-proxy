@@ -367,7 +367,9 @@ def _mock_sse_usage_split_two():
     aiter_bytes() yields.  No trailing \\n on the first chunk.
     """
     full_line = b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n'
-    mid = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens')
+    mid = len(
+        b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens'
+    )
     return [full_line[:mid], full_line[mid:]]
 
 
@@ -375,7 +377,9 @@ def _mock_sse_usage_split_three():
     """Final usage data split across three byte chunks."""
     full_line = b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens":7,"total_tokens":19}}\n'
     mid1 = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"')
-    mid2 = len(b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens')
+    mid2 = len(
+        b'data: {"id":"s1","object":"chat.completion.chunk","choices":[],"usage":{"prompt_tokens":12,"completion_tokens'
+    )
     return [full_line[:mid1], full_line[mid1:mid2], full_line[mid2:]]
 
 

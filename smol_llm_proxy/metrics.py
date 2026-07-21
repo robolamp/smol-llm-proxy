@@ -58,27 +58,53 @@ def _flush_batch_sync(batch):
 
 def _insert_log(conn, item):
     total = item["prompt_tokens"] + item["completion_tokens"]
-    conn.execute(_INSERT_SQL, (
-        item["key_id"], item["server_id"], item["model_name"], item["real_model_name"],
-        item["prompt_tokens"], item["completion_tokens"], total,
-        item["prompt_ms"], item["predicted_ms"],
-        item["key_name"], item["server_name"],
-    ))
+    conn.execute(
+        _INSERT_SQL,
+        (
+            item["key_id"],
+            item["server_id"],
+            item["model_name"],
+            item["real_model_name"],
+            item["prompt_tokens"],
+            item["completion_tokens"],
+            total,
+            item["prompt_ms"],
+            item["predicted_ms"],
+            item["key_name"],
+            item["server_name"],
+        ),
+    )
 
 
-def enqueue_usage(key_id, server_id, model_name, real_model_name, prompt_tokens,
-                  completion_tokens, prompt_ms=0.0, predicted_ms=0.0,
-                  key_name="", server_name=""):
+def enqueue_usage(
+    key_id,
+    server_id,
+    model_name,
+    real_model_name,
+    prompt_tokens,
+    completion_tokens,
+    prompt_ms=0.0,
+    predicted_ms=0.0,
+    key_name="",
+    server_name="",
+):
     if _usage_queue is None:
         _init_async_logger()
     try:
-        _usage_queue.put_nowait({
-            "key_id": key_id, "server_id": server_id,
-            "model_name": model_name, "real_model_name": real_model_name,
-            "prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens,
-            "prompt_ms": prompt_ms, "predicted_ms": predicted_ms,
-            "key_name": key_name, "server_name": server_name,
-        })
+        _usage_queue.put_nowait(
+            {
+                "key_id": key_id,
+                "server_id": server_id,
+                "model_name": model_name,
+                "real_model_name": real_model_name,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "prompt_ms": prompt_ms,
+                "predicted_ms": predicted_ms,
+                "key_name": key_name,
+                "server_name": server_name,
+            }
+        )
     except asyncio.QueueFull:
         print("usage queue full, dropping log entry")
 

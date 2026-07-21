@@ -1,4 +1,5 @@
-import os, secrets
+import os
+import secrets
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, Header, HTTPException, Query
 from fastapi.responses import Response
@@ -13,9 +14,11 @@ set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
 
 def _parse_usage_filters(request):
-    return {k: (int(v) if k in ("key_id", "server_id") else v)
-              for k in ("key_id", "server_id", "start_date", "end_date")
-              if (v := request.query_params.get(k)) is not None}
+    return {
+        k: (int(v) if k in ("key_id", "server_id") else v)
+        for k in ("key_id", "server_id", "start_date", "end_date")
+        if (v := request.query_params.get(k)) is not None
+    }
 
 
 async def _read_json_body(request: Request):
