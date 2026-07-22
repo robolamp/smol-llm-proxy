@@ -136,9 +136,7 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
     return key_info, routing, display_name, real_model_name, body_json, body_bytes
 
 
-_HOP_BY_HOP = frozenset(
-    "host authorization content-length transfer-encoding connection keep-alive te upgrade".split()
-)
+_HOP_BY_HOP = frozenset("host authorization content-length transfer-encoding connection keep-alive te upgrade".split())
 
 
 def _build_upstream(server, request, path):

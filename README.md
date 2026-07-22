@@ -54,7 +54,7 @@ The proxy listens on `0.0.0.0:8000` by default.
 docker build -t smol-llm-proxy .
 docker run -p 8000:8000 \
   -e ADMIN_KEY=secret \
-  -v db-data:/data \
+  -v db-data:/app/data \
   -v $(pwd)/config.yaml:/app/config.yaml:ro \
   smol-llm-proxy
 ```
@@ -69,9 +69,9 @@ Example configs ship with the package. Copy them:
 
 ```bash
 python -c "import smol_llm_proxy, shutil, os; d=os.path.dirname(smol_llm_proxy.__file__); shutil.copy2(f'{d}/config.example.yaml','config.yaml'); shutil.copy2(f'{d}/.env.example','.env')"
-cp .env.example .env                # set ADMIN_KEY
-cp config.example.yaml config.yaml  # fill in your servers
-ADMIN_KEY=secret python -m smol_llm_proxy
+# Edit .env and set ADMIN_KEY, then fill in config.yaml with your servers
+ADMIN_KEY=secret smol-llm-proxy
+# or: ADMIN_KEY=secret python -m smol_llm_proxy
 ```
 
 Or download from GitHub:
@@ -179,8 +179,8 @@ PROXY_PORT=8000
 
 The Compose setup mounts two volumes:
 
-- `db-data:/data` — SQLite database, persists across container restarts
-- `./config.yaml:/config/config.yaml:ro` — config file, read-only
+- `${DATA_DIR:-./data}:/app/data` — SQLite database (`DB_PATH=/app/data/proxy.db`), persists across container restarts. Override with `DATA_DIR` in `.env`.
+- `./config.yaml:/config/config.yaml:ro` — config file, read-only. Set `CONFIG_PATH=/config/config.yaml` in Compose (hardcoded, not from `.env`).
 
 
 ## Admin API

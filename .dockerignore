@@ -10,3 +10,5 @@ README.md
 tests/
 .dockerignore
 *.md
+config.yaml
+config.example.yaml

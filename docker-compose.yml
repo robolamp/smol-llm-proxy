@@ -7,7 +7,7 @@ services:
       - .env
     environment:
       - DB_PATH=${DB_CONTAINER_PATH:-/app/data/proxy.db}
-      - CONFIG_PATH=${CONFIG_PATH:-/config/config.yaml}
+      - CONFIG_PATH=/config/config.yaml
     volumes:
       - ${DATA_DIR:-./data}:/app/data
       - ./config.yaml:/config/config.yaml:ro
