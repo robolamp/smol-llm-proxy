@@ -144,14 +144,14 @@ aliases:
 
 ### Config sync semantics
 
-On startup, `config.yaml` is the **source of truth**:
-- Servers/aliases **not present** in `config.yaml` are **deleted** from the database.
-- Servers/aliases in the database **not present** in `config.yaml` are **deleted**.
+On startup, `config.yaml` is merged into the database:
+- Servers/aliases **present** in `config.yaml` are **upserted** into the database (new ones created, existing ones updated).
+- Servers/aliases present in the database but **not** in `config.yaml` are **kept** — YAML is additive, not destructive.
 - Models listed under a server in YAML are synced; extra models on that server are removed.
 - API keys, usage logs, and rate limits are **not** affected by config sync.
 - The in-memory route cache is cleared after sync.
 
-This means if you remove a server or alias from `config.yaml` and restart, it will be gone from the database. If you want to keep something permanently, manage it via the Admin API (not YAML).
+Servers and aliases managed via the Admin API persist across restarts. To remove them, use the Admin API (`DELETE /admin/servers/{id}`, `DELETE /admin/aliases/{name}`).
 
 ### Environment variables
 

@@ -170,8 +170,8 @@ class TestConfigSyncAcrossRestarts:
         try:
             resp = _api(client, "get", "/admin/servers")
             assert resp.status_code == 200
-            names = [s["name"] for s in resp.json()]
-            assert names == ["srv-b"]
+            names = sorted([s["name"] for s in resp.json()])
+            assert names == ["srv-a", "srv-b"]
         finally:
             self._teardown(proc, client)
 
@@ -326,6 +326,6 @@ class TestConfigSyncAcrossRestarts:
             resp = _api(client, "get", "/admin/aliases")
             assert resp.status_code == 200
             aliases = [a["alias_name"] for a in resp.json()]
-            assert aliases == []
+            assert aliases == ["fast"]
         finally:
             self._teardown(proc, client)

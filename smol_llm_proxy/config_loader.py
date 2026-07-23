@@ -55,9 +55,6 @@ def sync_config():
                     conn.execute(
                         "DELETE FROM server_models WHERE server_id = ? AND model_name = ?", (sid, row["model_name"])
                     )
-        for row in conn.execute("SELECT id, name FROM servers").fetchall():
-            if row["name"] not in yaml_servers:
-                conn.execute("DELETE FROM servers WHERE id = ?", (row["id"],))
         yaml_aliases = cfg.get("aliases", {})
         for an, rm in yaml_aliases.items():
             existing = conn.execute("SELECT id FROM model_aliases WHERE alias_name = ?", (an,)).fetchone()
@@ -65,9 +62,6 @@ def sync_config():
                 conn.execute("UPDATE model_aliases SET real_model_name = ? WHERE alias_name = ?", (rm, an))
             else:
                 conn.execute("INSERT INTO model_aliases (alias_name, real_model_name) VALUES (?, ?)", (an, rm))
-        for row in conn.execute("SELECT alias_name FROM model_aliases").fetchall():
-            if row["alias_name"] not in yaml_aliases:
-                conn.execute("DELETE FROM model_aliases WHERE alias_name = ?", (row["alias_name"],))
     from .cache import clear_route_cache
 
     clear_route_cache()
