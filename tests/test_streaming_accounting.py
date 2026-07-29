@@ -1,6 +1,6 @@
 """Streaming accounting: delta-event fallback when no timings/usage arrives."""
 
-from unittest.mock import patch, Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 from smol_llm_proxy.proxy import _parse_sse_chunk
 

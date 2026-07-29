@@ -1,5 +1,6 @@
 import os
 from pathlib import Path
+
 from .database import get_db
 
 CONFIG_PATH = Path(os.environ.get("CONFIG_PATH", "config.yaml"))

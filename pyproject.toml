@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smol-llm-proxy"
-version = "0.4.2"
+version = "0.4.3"
 description = "Lightweight API key proxy for llama.cpp server with token usage tracking"
 readme = "README.md"
 license = "Apache-2.0"
@@ -35,7 +35,7 @@ keywords = ["proxy", "llama.cpp", "llm", "api-key", "routing"]
 "GitHub" = "https://github.com/robolamp/smol-llm-proxy"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0", "pytest-rerunfailures>=14.0", "ruff>=0.6.0"]
+dev = ["pytest>=8.0", "pytest-rerunfailures>=14.0", "ruff~=0.6.0"]
 bench = ["locust>=2.31.0"]
 
 [project.scripts]

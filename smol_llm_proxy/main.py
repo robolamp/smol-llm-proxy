@@ -2,14 +2,16 @@ import asyncio
 import os
 import secrets
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Request, Header, HTTPException, Query
-from fastapi.responses import Response
+
 import orjson
+from fastapi import FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import Response
+
+from smol_llm_proxy.auth import create_api_key, delete_api_key, list_api_keys, toggle_api_key
+from smol_llm_proxy.cache import clear_key_cache, clear_route_cache, set_bench_cold
 from smol_llm_proxy.config import ADMIN_KEY
-from smol_llm_proxy.database import init_db, get_db
-from smol_llm_proxy.proxy import proxy_non_streaming, proxy_streaming, proxy_models
-from smol_llm_proxy.cache import clear_route_cache, clear_key_cache, set_bench_cold
-from smol_llm_proxy.auth import create_api_key, delete_api_key, toggle_api_key, list_api_keys
+from smol_llm_proxy.database import get_db, init_db
+from smol_llm_proxy.proxy import proxy_models, proxy_non_streaming, proxy_streaming
 
 set_bench_cold(os.environ.get("BENCH_COLD_CACHE") == "1")
 
@@ -33,16 +35,16 @@ async def _read_json_body(request: Request):
 @asynccontextmanager
 async def lifespan(app):
     from smol_llm_proxy.config_loader import sync_config
-    from smol_llm_proxy.rate_limiter import start_rate_flush
     from smol_llm_proxy.metrics import start_retention_cleanup
+    from smol_llm_proxy.rate_limiter import start_rate_flush
 
     init_db()
     sync_config()
     start_rate_flush()
     start_retention_cleanup()
     yield
-    from smol_llm_proxy.proxy import shutdown_httpx_client
     from smol_llm_proxy.metrics import _shutdown_async_logger, stop_retention_cleanup
+    from smol_llm_proxy.proxy import shutdown_httpx_client
     from smol_llm_proxy.rate_limiter import stop_rate_flush
 
     await shutdown_httpx_client()

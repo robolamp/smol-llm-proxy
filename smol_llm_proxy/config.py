@@ -3,6 +3,18 @@
 import os
 from pathlib import Path
 
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.strip().partition("=")
+        if sep and not key.startswith("#"):
+            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
+_load_dotenv()
+
 _ADMIN_KEY: str = os.environ.get("ADMIN_KEY", "")
 if not _ADMIN_KEY:
     raise RuntimeError(

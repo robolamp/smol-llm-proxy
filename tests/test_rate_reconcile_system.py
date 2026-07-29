@@ -19,18 +19,18 @@ class TestRateReconcileSystem:
     """Verify reconcile_rate survives a flush cycle."""
 
     def test_reconcile_across_flush(self):
+        from smol_llm_proxy.auth import create_api_key
         from smol_llm_proxy.database import get_db
         from smol_llm_proxy.rate_limiter import (
-            _rate_store,
-            _pending,
-            _thread_lock,
             _flush_to_db,
-            reserve_rate,
+            _pending,
+            _rate_store,
+            _thread_lock,
             reconcile_rate,
+            reserve_rate,
             start_rate_flush,
             stop_rate_flush,
         )
-        from smol_llm_proxy.auth import create_api_key
 
         async def _run():
             with _thread_lock:
@@ -68,9 +68,9 @@ class TestRateReconcileSystem:
 
     def test_reconcile_pending_cleared_after_flush(self):
         from smol_llm_proxy.rate_limiter import (
+            _flush_to_db,
             _pending,
             _thread_lock,
-            _flush_to_db,
             reconcile_rate,
             start_rate_flush,
             stop_rate_flush,

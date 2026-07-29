@@ -2,11 +2,11 @@
 
 import sqlite3
 import threading
-from pathlib import Path
 from contextlib import contextmanager
-from .config import get_db_path
-from .cache import get_cached_route, set_cached_route
+from pathlib import Path
 
+from .cache import get_cached_route, set_cached_route
+from .config import get_db_path
 
 _thread_local = threading.local()
 

@@ -1,7 +1,7 @@
 """Tests for embeddings endpoint proxy."""
 
 import json
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 class TestEmbeddingsEndpoint:

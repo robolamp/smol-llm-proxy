@@ -2,9 +2,9 @@
 """Profile proxy overhead per-request with cProfile."""
 
 import cProfile
-import pstats
 import io
 import os
+import pstats
 import sys
 import time as _time
 
@@ -12,11 +12,12 @@ sys.path.insert(0, "/workspace/smol-llm-proxy")
 os.environ["ADMIN_KEY"] = "Fdczv9kefrH2BctYxhToOWvEaBREkR7YfOaH3GIwFcE"
 os.environ["DB_PATH"] = "/tmp/profile_proxy.db"
 
-from smol_llm_proxy.database import init_db, get_db
-from smol_llm_proxy.auth import create_api_key
-from smol_llm_proxy.proxy import _build_proxy_context
-from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate
 from starlette.datastructures import Headers
+
+from smol_llm_proxy.auth import create_api_key
+from smol_llm_proxy.database import get_db, init_db
+from smol_llm_proxy.proxy import _build_proxy_context
+from smol_llm_proxy.rate_limiter import reconcile_rate, reserve_rate
 
 init_db()
 

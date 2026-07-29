@@ -2,16 +2,18 @@
 
 import asyncio
 import codecs
+
 import httpx
 import orjson
 from fastapi import HTTPException
-from fastapi.responses import StreamingResponse, Response, JSONResponse
-from .config import HTTPX_TIMEOUT, PROXY_MAX_CONNECTIONS, PROXY_MAX_KEEPALIVE, PROXY_KEEPALIVE_EXPIRY
-from .database import get_db, resolve_routing
-from .auth import _hash_key, _find_key_info_sync
+from fastapi.responses import JSONResponse, Response, StreamingResponse
+
+from .auth import _find_key_info_sync, _hash_key
 from .cache import get_cached_key
-from .rate_limiter import reserve_rate, reconcile_rate
+from .config import HTTPX_TIMEOUT, PROXY_KEEPALIVE_EXPIRY, PROXY_MAX_CONNECTIONS, PROXY_MAX_KEEPALIVE
+from .database import get_db, resolve_routing
 from .metrics import enqueue_usage
+from .rate_limiter import reconcile_rate, reserve_rate
 
 _httpx_client: httpx.AsyncClient | None = None
 
@@ -136,7 +138,9 @@ async def _build_proxy_context(request, path, *, body_bytes=None, body_json=None
     return key_info, routing, display_name, real_model_name, body_json, body_bytes
 
 
-_HOP_BY_HOP = frozenset("host authorization content-length transfer-encoding connection keep-alive te upgrade".split())
+_HOP_BY_HOP = frozenset(
+    ["host", "authorization", "content-length", "transfer-encoding", "connection", "keep-alive", "te", "upgrade"]
+)
 
 
 def _build_upstream(server, request, path):
@@ -226,7 +230,7 @@ async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
             for ln in lines:
                 try:
                     p, c, dc, pm, pr = _parse_sse_chunk(ln)
-                except (TypeError,):
+                except TypeError:
                     p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
                 if p > 0 or c > 0:
                     tp, tc = p, c
@@ -269,8 +273,7 @@ def _parse_sse_chunk(text):
             text = text.decode("utf-8", errors="replace")
         for line in text.strip().split("\n"):
             line = line.strip()
-            if line.startswith("data: "):
-                line = line[6:]
+            line = line.removeprefix("data: ")
             if line == "[DONE]":
                 continue
             try:

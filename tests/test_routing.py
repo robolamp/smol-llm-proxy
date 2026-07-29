@@ -55,8 +55,8 @@ class TestModelReassign:
         )
         assert resp.status_code == 200
 
-        from smol_llm_proxy.database import get_db, resolve_routing
         from smol_llm_proxy.auth import create_api_key
+        from smol_llm_proxy.database import get_db, resolve_routing
 
         result = create_api_key("reassign-test")
         key_id = result["id"]
@@ -90,8 +90,8 @@ class TestSingleServerPerModel:
         )
         assert resp.status_code == 200
 
-        from smol_llm_proxy.database import resolve_routing
         from smol_llm_proxy.auth import create_api_key
+        from smol_llm_proxy.database import resolve_routing
 
         result = create_api_key("single-test")
         key_id = result["id"]

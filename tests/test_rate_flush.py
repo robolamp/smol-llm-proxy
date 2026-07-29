@@ -13,7 +13,7 @@ def _clean_rate_state():
 
     with get_db() as conn:
         conn.execute("DELETE FROM rate_limits")
-    from smol_llm_proxy.rate_limiter import _rate_store, _pending
+    from smol_llm_proxy.rate_limiter import _pending, _rate_store
 
     _rate_store.clear()
     _pending.clear()
@@ -22,7 +22,7 @@ def _clean_rate_state():
 
     with get_db() as conn:
         conn.execute("DELETE FROM rate_limits")
-    from smol_llm_proxy.rate_limiter import _rate_store, _pending
+    from smol_llm_proxy.rate_limiter import _pending, _rate_store
 
     _rate_store.clear()
     _pending.clear()
@@ -32,7 +32,7 @@ def test_flush_upsert_accumulates(client, admin_key):
     """Multiple reserves + reconciles in the same window should accumulate via UPSERT."""
     from smol_llm_proxy.auth import create_api_key
     from smol_llm_proxy.database import get_db
-    from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate, _flush_to_db
+    from smol_llm_proxy.rate_limiter import _flush_to_db, reconcile_rate, reserve_rate
 
     result = create_api_key("flush-upsert-test")
     key_id = result["id"]
@@ -64,7 +64,7 @@ def test_flush_upsert_increments_on_second_flush(client):
     """Second flush to the same window should UPSERT and increment."""
     from smol_llm_proxy.auth import create_api_key
     from smol_llm_proxy.database import get_db
-    from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate, _flush_to_db
+    from smol_llm_proxy.rate_limiter import _flush_to_db, reconcile_rate, reserve_rate
 
     result = create_api_key("flush-upsert-inc")
     key_id = result["id"]
@@ -112,8 +112,8 @@ def test_flush_empty_store_does_nothing(client):
 def test_flush_cleanup_old_rows(client):
     """DELETE WHERE window_start < now-65 should remove expired rows."""
     from smol_llm_proxy.auth import create_api_key
-    from smol_llm_proxy.database import get_db, _get_connection
-    from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate, _flush_to_db, get_db_path
+    from smol_llm_proxy.database import _get_connection, get_db
+    from smol_llm_proxy.rate_limiter import _flush_to_db, get_db_path, reconcile_rate, reserve_rate
 
     result = create_api_key("flush-cleanup-test")
     key_id = result["id"]
@@ -164,7 +164,7 @@ def test_flush_unique_index_exists(client):
 def test_flush_stores_cleared_after_db_write(client):
     """After successful flush, all in-memory store dicts must be cleared."""
     from smol_llm_proxy.auth import create_api_key
-    from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate, _flush_to_db, _rate_store
+    from smol_llm_proxy.rate_limiter import _flush_to_db, _rate_store, reconcile_rate, reserve_rate
 
     result = create_api_key("flush-clear-test")
     key_id = result["id"]
@@ -183,7 +183,7 @@ def test_flush_multiple_keys(client):
     """Flush with multiple different key_ids should write all rows."""
     from smol_llm_proxy.auth import create_api_key
     from smol_llm_proxy.database import get_db
-    from smol_llm_proxy.rate_limiter import reserve_rate, reconcile_rate, _flush_to_db
+    from smol_llm_proxy.rate_limiter import _flush_to_db, reconcile_rate, reserve_rate
 
     r1 = create_api_key("flush-multi-1")
     r2 = create_api_key("flush-multi-2")
@@ -211,15 +211,15 @@ def test_flush_multiple_keys(client):
 def test_flush_failure_does_not_deadlock(client, admin_key):
     """A failed flush must not hold _thread_lock forever — reserve_rate must still return."""
     from smol_llm_proxy.auth import create_api_key
+    from smol_llm_proxy.database import get_db
     from smol_llm_proxy.rate_limiter import (
-        reserve_rate,
-        reconcile_rate,
         _flush_to_db,
+        _pending,
         _rate_store,
         _thread_lock,
-        _pending,
+        reconcile_rate,
+        reserve_rate,
     )
-    from smol_llm_proxy.database import get_db
 
     result = create_api_key("flush-fail-test")
     key_id = result["id"]
@@ -274,15 +274,15 @@ def test_flush_failure_does_not_deadlock(client, admin_key):
 def test_flush_failure_merges_instead_of_overwriting(client, admin_key):
     """On flush failure, the restore must merge increments (not wholesale overwrite)."""
     from smol_llm_proxy.auth import create_api_key
+    from smol_llm_proxy.database import get_db
     from smol_llm_proxy.rate_limiter import (
-        reserve_rate,
-        reconcile_rate,
         _flush_to_db,
+        _pending,
         _rate_store,
         _thread_lock,
-        _pending,
+        reconcile_rate,
+        reserve_rate,
     )
-    from smol_llm_proxy.database import get_db
 
     result = create_api_key("flush-merge-test")
     key_id = result["id"]

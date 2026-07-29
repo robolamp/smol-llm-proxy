@@ -1,6 +1,7 @@
 """Locust benchmark: direct llama-server (baseline)."""
 
 import os
+
 from locust import HttpUser, task
 
 DIRECT_URL = os.environ.get("DIRECT_URL", "http://host:port")

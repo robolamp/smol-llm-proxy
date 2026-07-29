@@ -1,6 +1,6 @@
 """Tests for request validation (invalid bodies, missing fields)."""
 
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 class TestInvalidBody:

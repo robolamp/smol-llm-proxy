@@ -1,6 +1,6 @@
 """Tests for streaming proxy endpoint."""
 
-from unittest.mock import patch, Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock, patch
 
 
 def _mock_sse_chunks():

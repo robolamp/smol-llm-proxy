@@ -1,13 +1,12 @@
 """Verify data persistence across proxy restarts (cache clears)."""
 
 import os
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 def test_keys_persist_after_restart(client):
     """Create a key, clear caches, verify key still works."""
-    from smol_llm_proxy.auth import create_api_key
-    from smol_llm_proxy.auth import _find_key_info_sync
+    from smol_llm_proxy.auth import _find_key_info_sync, create_api_key
 
     result = create_api_key("persist-test")
     raw_key = result["key"]
@@ -29,12 +28,11 @@ def test_keys_persist_after_restart(client):
 
 def test_usage_logs_persist_after_restart(client, server_with_model):
     """Ensure usage logs written to DB survive cache clears (proxy restart)."""
-    from smol_llm_proxy.metrics import enqueue_usage
-    from smol_llm_proxy.cache import clear_key_cache
-    from smol_llm_proxy.database import get_db
-
     # Create a user key
     from smol_llm_proxy.auth import create_api_key
+    from smol_llm_proxy.cache import clear_key_cache
+    from smol_llm_proxy.database import get_db
+    from smol_llm_proxy.metrics import enqueue_usage
 
     result = create_api_key("persist-log-user")
     user_key = result["key"]

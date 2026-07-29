@@ -3,7 +3,8 @@
 import json
 import os
 import threading
-from locust import HttpUser, task, events
+
+from locust import HttpUser, events, task
 
 TIMING_FILE = "/tmp/bench_proxy_timings.jsonl"
 _timing_lock = threading.Lock()

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+
 from .database import get_db
 
 _usage_queue: asyncio.Queue | None = None

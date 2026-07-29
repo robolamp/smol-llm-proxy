@@ -1,7 +1,7 @@
 """Tests for rate limiting (RPM + TPM)."""
 
 import os
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 
 def test_rate_limit_429_on_rpm_exceeded(client, server_with_model):

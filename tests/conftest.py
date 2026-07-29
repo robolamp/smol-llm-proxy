@@ -3,8 +3,8 @@
 import os
 import tempfile
 import uuid
-import pytest
 
+import pytest
 from fastapi.testclient import TestClient
 
 os.environ["ADMIN_KEY"] = "test-admin-key"
@@ -53,6 +53,7 @@ def _reset_http_client():
     """Reset shared httpx client after each test to avoid event loop issues."""
     yield
     import asyncio
+
     import smol_llm_proxy.proxy
 
     if smol_llm_proxy.proxy._httpx_client is None:

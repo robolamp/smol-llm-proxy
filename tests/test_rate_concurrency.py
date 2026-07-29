@@ -16,9 +16,9 @@ class TestRateLimitConcurrency:
 
     def test_rpm_enforced_under_concurrency(self):
         """rpm_limit=5, 50 concurrent requests -> at most 5 should pass."""
+        from smol_llm_proxy.auth import create_api_key
         from smol_llm_proxy.database import get_db
         from smol_llm_proxy.rate_limiter import _rate_store, _thread_lock
-        from smol_llm_proxy.auth import create_api_key
 
         # Reset rate store
         with _thread_lock:
@@ -45,9 +45,9 @@ class TestRateLimitConcurrency:
 
     def test_reserve_rate_enforces_limit(self):
         """reserve_rate correctly reserves quota under one lock."""
+        from smol_llm_proxy.auth import create_api_key
         from smol_llm_proxy.database import get_db
         from smol_llm_proxy.rate_limiter import _rate_store, _thread_lock, reserve_rate
-        from smol_llm_proxy.auth import create_api_key
 
         # Reset rate store
         with _thread_lock:
@@ -71,9 +71,9 @@ class TestRateLimitConcurrency:
 
     def test_reserve_rate_with_reconciliation(self):
         """reconcile_rate correctly adjusts the token delta."""
-        from smol_llm_proxy.database import get_db
-        from smol_llm_proxy.rate_limiter import _rate_store, _thread_lock, reserve_rate, reconcile_rate
         from smol_llm_proxy.auth import create_api_key
+        from smol_llm_proxy.database import get_db
+        from smol_llm_proxy.rate_limiter import _rate_store, _thread_lock, reconcile_rate, reserve_rate
 
         with _thread_lock:
             _rate_store.clear()
@@ -97,9 +97,9 @@ class TestRateLimitConcurrency:
 
     def test_reserve_rate_rpm_prevents_burst(self):
         """Multiple concurrent reserve_rate calls respect RPM limit."""
+        from smol_llm_proxy.auth import create_api_key
         from smol_llm_proxy.database import get_db
         from smol_llm_proxy.rate_limiter import _rate_store, _thread_lock, reserve_rate
-        from smol_llm_proxy.auth import create_api_key
 
         with _thread_lock:
             _rate_store.clear()

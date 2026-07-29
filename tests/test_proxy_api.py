@@ -1,7 +1,7 @@
 """Tests for proxy endpoints (integration with mock backend)."""
 
 import json
-from unittest.mock import patch, AsyncMock, Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 
 def _mock_response(model_name="model.gguf"):
@@ -29,7 +29,7 @@ class TestProxyAuth:
         assert resp.status_code == 403
 
     def test_inactive_key(self, client, admin_key):
-        from smol_llm_proxy.auth import toggle_api_key, list_api_keys
+        from smol_llm_proxy.auth import list_api_keys, toggle_api_key
 
         key_id = [k for k in list_api_keys() if k["name"] == "test-user"][0]["id"]
         toggle_api_key(key_id, False)
@@ -202,7 +202,7 @@ class TestModelsEndpoint:
         assert resp.status_code == 403
 
     def test_models_inactive_key(self, client, admin_key):
-        from smol_llm_proxy.auth import toggle_api_key, list_api_keys
+        from smol_llm_proxy.auth import list_api_keys, toggle_api_key
 
         key_id = [k for k in list_api_keys() if k["name"] == "test-user"][0]["id"]
         toggle_api_key(key_id, False)

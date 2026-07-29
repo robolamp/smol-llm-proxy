@@ -1,12 +1,12 @@
 """Tests for auth module: API key CRUD and validation."""
 
 from smol_llm_proxy.auth import (
+    _find_key_info_sync,
     create_api_key,
     delete_api_key,
-    toggle_api_key,
     list_api_keys,
+    toggle_api_key,
 )
-from smol_llm_proxy.auth import _find_key_info_sync
 
 
 def _get_key_id(name):

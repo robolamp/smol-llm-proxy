@@ -1,11 +1,11 @@
 """Integration tests: full flow with real llama-server backends."""
 
 import os
-
-import pytest
-import httpx
 import threading
 import time
+
+import httpx
+import pytest
 import yaml
 
 
@@ -44,6 +44,7 @@ def available_servers():
 def integration_key(client):
     """Create a dedicated key for integration tests."""
     import uuid
+
     from smol_llm_proxy.auth import create_api_key
     from smol_llm_proxy.database import get_db
 
@@ -104,7 +105,9 @@ def proxy_http_url(available_servers):
     This fixture starts uvicorn in a thread and yields the base URL.
     """
     import tempfile as _tempfile
+
     import uvicorn
+
     from smol_llm_proxy.config import PROXY_HOST, PROXY_PORT
     from smol_llm_proxy.main import app
 
