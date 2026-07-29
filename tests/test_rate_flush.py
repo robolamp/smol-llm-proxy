@@ -62,16 +62,26 @@ def test_flush_upsert_accumulates(client, admin_key):
 
 def test_flush_upsert_increments_on_second_flush(client):
     """Second flush to the same window should UPSERT and increment."""
+    import time
+
     from smol_llm_proxy.auth import create_api_key
     from smol_llm_proxy.database import get_db
-    from smol_llm_proxy.rate_limiter import _flush_to_db, reconcile_rate, reserve_rate
+    from smol_llm_proxy.rate_limiter import (
+        _flush_to_db,
+        _rate_store,
+        _thread_lock,
+    )
 
     result = create_api_key("flush-upsert-inc")
     key_id = result["id"]
 
+    # Fixed window_start near the current second — deterministic, no wall-clock drift
+    ws = float(int(time.time()))
+
     # First batch
-    _, _, ws = reserve_rate(key_id, 100, 1000000, 10)
-    reconcile_rate(key_id, 10, ws, 10)
+    with _thread_lock:
+        store = _rate_store.setdefault(key_id, {})
+        store[ws] = {"rc": 1, "ts": 10}
     asyncio.run(_flush_to_db())
 
     with get_db() as conn:
@@ -81,9 +91,10 @@ def test_flush_upsert_increments_on_second_flush(client):
         ).fetchone()
     assert row["request_count"] == 1
 
-    # Second batch to the same window
-    _, _, ws2 = reserve_rate(key_id, 100, 1000000, 10)
-    reconcile_rate(key_id, 20, ws2, 10)
+    # Second batch to the SAME window — should UPSERT and increment
+    with _thread_lock:
+        store = _rate_store.setdefault(key_id, {})
+        store[ws] = {"rc": 1, "ts": 20}
     asyncio.run(_flush_to_db())
 
     with get_db() as conn:
