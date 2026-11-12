@@ -45,6 +45,7 @@ If you self-host several llama-server instances on one or more machines and want
 - **Model aliases** (`alias` -> `model-name.gguf`)
 - **Token usage logging** — prompt/completion tokens, timings, 90-day retention with daily purge
 - **Streaming and non-streaming** proxy support for chat, completions, and embeddings
+- **SSE keepalive comments** — during model loads the proxy emits `: keepalive` SSE comment lines that OpenAI-compatible clients ignore, so a reverse proxy with a ~100 s time-to-first-byte limit (Cloudflare) does not abort with 524/504. A failure after the stream has started is reported as an in-band `{"error": {...}}` SSE event rather than an HTTP status
 - **Connection-pooled httpx client** (keepalive connections to backends)
 - **SQLite backend** (zero external DB dependencies)
 
@@ -287,6 +288,7 @@ Each request logs: user, server, model name, prompt/completion tokens, timings (
 | `PROXY_MAX_CONNECTIONS` | `50` | httpx connection pool max size |
 | `PROXY_MAX_KEEPALIVE` | `20` | httpx keepalive pool max size |
 | `PROXY_KEEPALIVE_EXPIRY` | `30.0` | httpx keepalive expiry (seconds) |
+| `SSE_KEEPALIVE_INTERVAL` | `15` | Seconds to wait for upstream response headers before emitting SSE `: keepalive` comments; `0` disables keepalives |
 | `BENCH_COLD_CACHE` | *(unset)* | Set to `"1"` to disable in-memory caches (for benchmarking) |
 
 For `pip install`, set them in shell or via a `.env`-like loader (the proxy reads `.env` from the current working directory at startup). For Docker Compose, put them in `.env`:

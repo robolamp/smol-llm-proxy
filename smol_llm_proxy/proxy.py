@@ -10,7 +10,13 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from .auth import _find_key_info_sync, _hash_key
 from .cache import get_cached_key
-from .config import HTTPX_TIMEOUT, PROXY_KEEPALIVE_EXPIRY, PROXY_MAX_CONNECTIONS, PROXY_MAX_KEEPALIVE
+from .config import (
+    HTTPX_TIMEOUT,
+    PROXY_KEEPALIVE_EXPIRY,
+    PROXY_MAX_CONNECTIONS,
+    PROXY_MAX_KEEPALIVE,
+    SSE_KEEPALIVE_INTERVAL,
+)
 from .database import get_db, resolve_routing
 from .metrics import enqueue_usage
 from .rate_limiter import reconcile_rate, reserve_rate
@@ -91,17 +97,13 @@ def _parse_usage_from_body(body_bytes):
 
 
 def _estimate_input_tokens(body_json):
-    if "messages" in body_json:
-        text = sum(len(m.get("content", "")) for m in body_json["messages"] if isinstance(m.get("content"), str))
-    elif "prompt" in body_json:
-        p = body_json["prompt"]
-        text = len(p) if isinstance(p, str) else sum(len(x) for x in p if isinstance(x, str))
-    elif "input" in body_json:
-        inp = body_json["input"]
-        text = len(inp) if isinstance(inp, str) else sum(len(x) for x in inp if isinstance(x, str))
-    else:
-        text = 0
-    return max(1, text // 4)
+    """Rough input-token estimate from the request body, ~4 characters per token."""
+    raw = next((body_json[k] for k in ("messages", "prompt", "input") if k in body_json), "")
+    if isinstance(raw, str):
+        raw = [raw]
+    elif isinstance(raw, list) and raw and isinstance(raw[0], dict):
+        raw = [m.get("content", "") for m in raw]
+    return max(1, sum(len(x) for x in raw if isinstance(x, str)) // 4)
 
 
 async def _check_rate_limit(key_info, body_json):
@@ -152,29 +154,13 @@ def _build_upstream(server, request, path):
     return target_url, upstream_headers
 
 
-async def _proxy_setup(request, path, *, body_bytes=None, body_json=None):
-    key_info, routing, display_name, real_model_name, body_json, body_bytes = await _build_proxy_context(
-        request, path, body_bytes=body_bytes, body_json=body_json
-    )
-    server = {"id": routing["server_id"], "url": routing["url"], "api_key": routing.get("api_key", "")}
-    return (
-        key_info,
-        routing,
-        display_name,
-        real_model_name,
-        body_json,
-        body_bytes,
-        *(_build_upstream(server, request, path)),
-    )
-
-
 async def _check_and_setup(request, path, *, body_bytes=None, body_json=None):
-    result = await _proxy_setup(request, path, body_bytes=body_bytes, body_json=body_json)
-    ki, rt, dn, rm, bj, bb, tu, uh = result
+    """Validate the key, resolve routing, reserve rate quota and build the upstream request."""
+    ki, rt, dn, rm, bj, bb = await _build_proxy_context(request, path, body_bytes=body_bytes, body_json=body_json)
     rr, aw = await _check_rate_limit(ki, bj)
     if rr:
         return rr
-    return result + (aw,)
+    return ki, rt, dn, rm, bj, bb, *_build_upstream(rt, request, path), aw
 
 
 def _rate_limit_response(retry_after):
@@ -200,73 +186,125 @@ async def proxy_non_streaming(request, path, *, body_bytes=None, body_json=None)
 
 
 async def proxy_streaming(request, path, *, body_bytes=None, body_json=None):
+    """Proxy a streaming request, emitting SSE keepalives while the upstream is still thinking."""
     result = await _check_and_setup(request, path, body_bytes=body_bytes, body_json=body_json)
     if isinstance(result, JSONResponse):
         return result
     ki, rt, dn, rm, bj, bb, tu, uh, aw = result
-    tp, tc, lpm, lpr = 0, 0, 0.0, 0.0
     et = _estimate_input_tokens(bj)
     client = get_httpx_client()
-    request_obj = client.build_request("POST", tu, headers=uh, content=bb)
+    upstream = client.build_request("POST", tu, headers=uh, content=bb)
+    send_task = asyncio.create_task(client.send(upstream, stream=True))
     try:
-        resp = await client.send(request_obj, stream=True)
+        if SSE_KEEPALIVE_INTERVAL > 0:
+            await asyncio.wait((send_task,), timeout=SSE_KEEPALIVE_INTERVAL)
+            if not send_task.done():
+                # Headers have not arrived yet: commit to SSE and keep the connection warm from here on.
+                return StreamingResponse(
+                    _keepalive_stream(send_task, ki, rt, dn, rm, et, aw), media_type="text/event-stream"
+                )
+        resp = await send_task
     except httpx.HTTPError as e:
         raise HTTPException(status_code=504 if isinstance(e, httpx.TimeoutException) else 502, detail=str(e))
+    except BaseException:
+        await _discard_send(send_task)
+        raise
     if resp.status_code != 200:
-        bb = await resp.aread()
+        body = await resp.aread()
         await resp.aclose()
-        return Response(bb, resp.status_code, media_type="application/json")
+        return Response(body, resp.status_code, media_type="application/json")
+    return StreamingResponse(_stream_upstream(resp, ki, rt, dn, rm, et, aw), media_type="text/event-stream")
 
-    _dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    _buf = b""
-    _seen = [0]
 
-    async def generate():
-        nonlocal tp, tc, lpm, lpr, _buf
-        _seen[0] = 0
-
-        def _account(lines):
-            nonlocal tp, tc, lpm, lpr
-            for ln in lines:
-                try:
-                    p, c, dc, pm, pr = _parse_sse_chunk(ln)
-                except TypeError:
-                    p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
-                if p > 0 or c > 0:
-                    tp, tc = p, c
-                _seen[0] += dc
-                if pm > 0 or pr > 0:
-                    lpm, lpr = pm, pr
-
+async def _keepalive_stream(send_task, ki, rt, dn, rm, et, aw):
+    """Yield SSE comments until the upstream send resolves, then proxy the stream itself."""
+    try:
+        while not send_task.done():
+            await asyncio.wait((send_task,), timeout=SSE_KEEPALIVE_INTERVAL)
+            if not send_task.done():
+                yield b": keepalive\n\n"
         try:
-            async for chunk in resp.aiter_bytes():
-                if not chunk:
-                    continue
-                _buf += chunk
-                idx = _buf.rfind(b"\n")
-                if idx >= 0:
-                    _account(_dec.decode(_buf[: idx + 1], final=False).splitlines())
-                    _buf = _buf[idx + 1 :]
-                yield chunk
-            if _buf:
-                _account(_dec.decode(_buf, final=True).splitlines())
-                _buf = b""
-        finally:
+            resp = send_task.result()
+        except httpx.HTTPError as e:
+            yield _upstream_error_event(str(e), 504 if isinstance(e, httpx.TimeoutException) else 502)
+            return
+        if resp.status_code != 200:
+            body = await resp.aread()
             await resp.aclose()
-            if not (tp or tc):
-                tp, tc = et, _seen[0]
-            reconcile_rate(ki["id"], tp + tc, aw, et)
-            enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr, ki["name"], rt.get("server_name", ""))
+            yield _upstream_error_event(body.decode("utf-8", "replace"), resp.status_code)
+            return
+        async for chunk in _stream_upstream(resp, ki, rt, dn, rm, et, aw):
+            yield chunk
+    finally:
+        # Covers client disconnects before and during streaming: nothing may be left open.
+        await _discard_send(send_task)
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+
+async def _discard_send(send_task):
+    """Cancel an abandoned upstream send and close whichever response actually arrived."""
+    send_task.cancel()
+    try:
+        resp = await send_task
+    except BaseException:
+        return
+    await resp.aclose()
+
+
+def _upstream_error_event(message, status):
+    """Build an OpenAI-style SSE error event for a failure that lands after the 200 was sent."""
+    try:
+        message = orjson.loads(message)["error"]["message"]
+    except Exception:
+        pass
+    payload = {"error": {"message": str(message)[:500], "type": "upstream_error", "code": status}}
+    return b"data: " + orjson.dumps(payload) + b"\n\n"
+
+
+async def _stream_upstream(resp, ki, rt, dn, rm, et, aw):
+    """Forward upstream SSE bytes while accumulating token usage, then bill for the request."""
+    tp = tc = 0
+    lpm = lpr = 0.0
+    dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
+    buf, seen = b"", 0
+
+    def _account(lines):
+        nonlocal tp, tc, lpm, lpr, seen
+        for ln in lines:
+            try:
+                p, c, dc, pm, pr = _parse_sse_chunk(ln)
+            except TypeError:
+                p, c, dc, pm, pr = 0, 0, 0, 0.0, 0.0
+            if p > 0 or c > 0:
+                tp, tc = p, c
+            seen += dc
+            if pm > 0 or pr > 0:
+                lpm, lpr = pm, pr
+
+    try:
+        async for chunk in resp.aiter_bytes():
+            if not chunk:
+                continue
+            buf += chunk
+            idx = buf.rfind(b"\n")
+            if idx >= 0:
+                _account(dec.decode(buf[: idx + 1], final=False).splitlines())
+                buf = buf[idx + 1 :]
+            yield chunk
+        if buf:
+            _account(dec.decode(buf, final=True).splitlines())
+    finally:
+        await resp.aclose()
+        if not (tp or tc):
+            tp, tc = et, seen
+        reconcile_rate(ki["id"], tp + tc, aw, et)
+        enqueue_usage(ki["id"], rt["server_id"], dn, rm, tp, tc, lpm, lpr, ki["name"], rt.get("server_name", ""))
 
 
 def _parse_sse_chunk(text):
     """Parse SSE chunk: extract timings, usage, and delta count."""
     delta_count = 0
     last_pm = last_pr = 0.0
-    last_usage_p = None
-    last_usage_c = None
+    last_usage_p = last_usage_c = None
     fallback_p = fallback_c = 0
     try:
         if isinstance(text, bytes):
@@ -282,18 +320,15 @@ def _parse_sse_chunk(text):
                 continue
             if not isinstance(data, dict):
                 continue
-            timings = data.get("timings", {})
+            timings = data.get("timings")
             if isinstance(timings, dict) and timings:
-                pn = timings.get("prompt_n", 0) or 0
-                cn = timings.get("predicted_n", 0) or 0
+                pn, cn = timings.get("prompt_n", 0) or 0, timings.get("predicted_n", 0) or 0
                 if pn > 0 or cn > 0:
                     fallback_p, fallback_c = pn, cn
-                last_pm = timings.get("prompt_ms", 0.0) or 0.0
-                last_pr = timings.get("predicted_ms", 0.0) or 0.0
-            usage = data.get("usage", {})
+                last_pm, last_pr = timings.get("prompt_ms", 0.0) or 0.0, timings.get("predicted_ms", 0.0) or 0.0
+            usage = data.get("usage")
             if isinstance(usage, dict) and usage:
-                up = usage.get("prompt_tokens", 0)
-                uc = usage.get("completion_tokens", 0)
+                up, uc = usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)
                 if up > 0 or uc > 0:
                     last_usage_p, last_usage_c = up, uc
             for ch in data.get("choices", []):
@@ -303,9 +338,8 @@ def _parse_sse_chunk(text):
                         delta_count += len(content)
     except (UnicodeDecodeError, TypeError):
         pass
-    if last_usage_p is not None:
-        return last_usage_p, last_usage_c, delta_count, last_pm, last_pr
-    return fallback_p, fallback_c, delta_count, last_pm, last_pr
+    final = (last_usage_p, last_usage_c) if last_usage_p is not None else (fallback_p, fallback_c)
+    return (*final, delta_count, last_pm, last_pr)
 
 
 async def proxy_models(request):

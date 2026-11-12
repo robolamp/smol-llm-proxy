@@ -9,7 +9,7 @@ _usage_queue: asyncio.Queue | None = None
 _logger_task: asyncio.Task = None
 _retention_task: asyncio.Task = None
 _RETENTION_DAYS = 90
-_INSERT_SQL = "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, prompt_ms, predicted_ms, key_name, server_name) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+_INSERT_SQL = "INSERT INTO usage_logs (key_id, server_id, model_name, real_model_name, prompt_tokens, completion_tokens, total_tokens, prompt_ms, predicted_ms, key_name, server_name) VALUES (:key_id, :server_id, :model_name, :real_model_name, :prompt_tokens, :completion_tokens, :total_tokens, :prompt_ms, :predicted_ms, :key_name, :server_name)"
 
 
 def _init_async_logger():
@@ -58,23 +58,7 @@ def _flush_batch_sync(batch):
 
 
 def _insert_log(conn, item):
-    total = item["prompt_tokens"] + item["completion_tokens"]
-    conn.execute(
-        _INSERT_SQL,
-        (
-            item["key_id"],
-            item["server_id"],
-            item["model_name"],
-            item["real_model_name"],
-            item["prompt_tokens"],
-            item["completion_tokens"],
-            total,
-            item["prompt_ms"],
-            item["predicted_ms"],
-            item["key_name"],
-            item["server_name"],
-        ),
-    )
+    conn.execute(_INSERT_SQL, item)
 
 
 def enqueue_usage(
@@ -89,23 +73,13 @@ def enqueue_usage(
     key_name="",
     server_name="",
 ):
+    # The usage record is the parameter dict itself; sqlite binds the named placeholders in _INSERT_SQL by key.
+    item = dict(locals())
+    item["total_tokens"] = prompt_tokens + completion_tokens
     if _usage_queue is None:
         _init_async_logger()
     try:
-        _usage_queue.put_nowait(
-            {
-                "key_id": key_id,
-                "server_id": server_id,
-                "model_name": model_name,
-                "real_model_name": real_model_name,
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "prompt_ms": prompt_ms,
-                "predicted_ms": predicted_ms,
-                "key_name": key_name,
-                "server_name": server_name,
-            }
-        )
+        _usage_queue.put_nowait(item)
     except asyncio.QueueFull:
         pass
 

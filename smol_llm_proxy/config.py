@@ -29,6 +29,7 @@ HTTPX_TIMEOUT: float = float(os.environ.get("HTTPX_TIMEOUT", "120"))
 PROXY_MAX_CONNECTIONS: int = int(os.environ.get("PROXY_MAX_CONNECTIONS", "50"))
 PROXY_MAX_KEEPALIVE: int = int(os.environ.get("PROXY_MAX_KEEPALIVE", "20"))
 PROXY_KEEPALIVE_EXPIRY: float = float(os.environ.get("PROXY_KEEPALIVE_EXPIRY", "30.0"))
+SSE_KEEPALIVE_INTERVAL: float = float(os.environ.get("SSE_KEEPALIVE_INTERVAL", "15"))
 
 
 def get_db_path() -> Path:
