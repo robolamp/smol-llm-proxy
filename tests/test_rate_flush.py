@@ -13,19 +13,23 @@ def _clean_rate_state():
 
     with get_db() as conn:
         conn.execute("DELETE FROM rate_limits")
-    from smol_llm_proxy.rate_limiter import _pending, _rate_store
+    from smol_llm_proxy.rate_limiter import _lock, _pending, _rate_store
 
     _rate_store.clear()
     _pending.clear()
+    # Reset loop binding — uvicorn server threads (e.g. test_integration.py's
+    # proxy_http_url fixture) may have set _lock._loop to a different event loop.
+    _lock._loop = None
     yield
     from smol_llm_proxy.database import get_db
 
     with get_db() as conn:
         conn.execute("DELETE FROM rate_limits")
-    from smol_llm_proxy.rate_limiter import _pending, _rate_store
+    from smol_llm_proxy.rate_limiter import _lock, _pending, _rate_store
 
     _rate_store.clear()
     _pending.clear()
+    _lock._loop = None
 
 
 def test_flush_upsert_accumulates(client, admin_key):

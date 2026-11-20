@@ -329,3 +329,20 @@ class TestConfigSyncAcrossRestarts:
             assert aliases == ["fast"]
         finally:
             self._teardown(proc, client)
+
+
+class TestConfigDirectoryError:
+    """CONFIG_PATH pointing to a directory must raise RuntimeError."""
+
+    def test_config_path_is_directory_raises_runtime_error(self, tmp_path, monkeypatch):
+        """When CONFIG_PATH points to a directory, sync_config() raises RuntimeError."""
+        from smol_llm_proxy import config_loader
+
+        # Create a directory to serve as CONFIG_PATH
+        config_dir = tmp_path / "config_dir"
+        config_dir.mkdir()
+
+        monkeypatch.setattr(config_loader, "CONFIG_PATH", config_dir)
+
+        with pytest.raises(RuntimeError, match="CONFIG_PATH .* is a directory"):
+            config_loader.sync_config()

@@ -11,7 +11,9 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .auth import _find_key_info_sync, _hash_key
 from .cache import get_cached_key
 from .config import (
+    HTTPX_CONNECT_TIMEOUT,
     HTTPX_TIMEOUT,
+    MODELS_TIMEOUT,
     PROXY_KEEPALIVE_EXPIRY,
     PROXY_MAX_CONNECTIONS,
     PROXY_MAX_KEEPALIVE,
@@ -44,7 +46,7 @@ def get_httpx_client() -> httpx.AsyncClient:
     global _httpx_client
     if _httpx_client is None or _httpx_client.is_closed:
         _httpx_client = httpx.AsyncClient(
-            timeout=HTTPX_TIMEOUT,
+            timeout=httpx.Timeout(HTTPX_TIMEOUT, connect=HTTPX_CONNECT_TIMEOUT),
             limits=httpx.Limits(
                 max_connections=PROXY_MAX_CONNECTIONS,
                 max_keepalive_connections=PROXY_MAX_KEEPALIVE,
@@ -64,9 +66,7 @@ async def shutdown_httpx_client():
 
 def _extract_user_key(authorization):
     """Extract the API key from a Bearer authorization header."""
-    if not authorization or not authorization.startswith("Bearer "):
-        return None
-    return authorization[7:].strip()
+    return authorization[7:].strip() if authorization and authorization.startswith("Bearer ") else None
 
 
 def _format_server_url(server_url, path):
@@ -75,9 +75,8 @@ def _format_server_url(server_url, path):
 
 
 async def _forward_request(target_url, headers, body, method):
-    client = get_httpx_client()
     try:
-        resp = await client.request(method=method, url=target_url, headers=headers, content=body)
+        resp = await get_httpx_client().request(method=method, url=target_url, headers=headers, content=body)
         return resp.status_code, resp.content
     except httpx.HTTPError as e:
         raise HTTPException(status_code=504 if isinstance(e, httpx.TimeoutException) else 502, detail=str(e))
@@ -346,18 +345,20 @@ async def proxy_models(request):
     await _validate_api_key(request)
 
     with get_db() as conn:
-        rows = conn.execute("SELECT url, id FROM servers WHERE active = 1").fetchall()
+        rows = conn.execute("SELECT url, id, name, api_key FROM servers WHERE active = 1").fetchall()
     if not rows:
         raise HTTPException(status_code=503, detail="No active llama-server configured")
 
     async def _fetch(row):
         try:
-            _, rb = await _forward_request(_format_server_url(row["url"], "/v1/models"), {}, b"", "GET")
+            headers = {"authorization": f"Bearer {row['api_key']}"} if row["api_key"] else {}
+            coro = _forward_request(_format_server_url(row["url"], "/v1/models"), headers, b"", "GET")
+            _, rb = await asyncio.wait_for(coro, MODELS_TIMEOUT)
             data = orjson.loads(rb)
             if "data" in data:
                 return data["data"]
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"WARNING: /v1/models: {row['name']} id={row['id']} {row['url']}: {type(e).__name__}", flush=True)
         return []
 
     results = await asyncio.gather(*(_fetch(row) for row in rows), return_exceptions=True)

@@ -12,6 +12,8 @@ def _load_yaml():
 
         with open(CONFIG_PATH) as f:
             return yaml.safe_load(f) or {}
+    except IsADirectoryError:
+        raise RuntimeError(f"CONFIG_PATH {CONFIG_PATH} is a directory, not a file") from None
     except (FileNotFoundError, ImportError):
         return {}
 

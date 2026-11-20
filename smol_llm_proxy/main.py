@@ -1,6 +1,7 @@
 import asyncio
 import os
 import secrets
+import sqlite3
 from contextlib import asynccontextmanager
 
 import orjson
@@ -68,13 +69,16 @@ def _check_admin(authorization: str | None):
 async def admin_create_server(request: Request, authorization: str | None = Header(None)):
     _check_admin(authorization)
     data = await request.json()
+    name, url = data.get("name", ""), data.get("url", "")
+    if not (isinstance(name, str) and name.strip() and isinstance(url, str) and url.strip()):
+        raise HTTPException(status_code=400, detail="name and url are required")
     try:
         with get_db() as conn:
             cursor = conn.execute(
                 "INSERT INTO servers (name, url, api_key) VALUES (?, ?, ?)",
-                (data["name"], data["url"], data.get("api_key", "")),
+                (name, url, data.get("api_key", "")),
             )
-    except Exception:
+    except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Server with this name already exists")
     clear_route_cache()
     return {"ok": True, "id": cursor.lastrowid}
@@ -133,6 +137,8 @@ async def admin_assign_model(
         raise HTTPException(status_code=400, detail="model_name is required")
     reassign_flag = (reassign or "").strip().lower() in ("1", "true", "yes")
     with get_db() as conn:
+        if not conn.execute("SELECT 1 FROM servers WHERE id = ?", (server_id,)).fetchone():
+            raise HTTPException(status_code=404, detail="Server not found")
         existing = conn.execute(
             "SELECT sm.server_id, s.name FROM server_models sm JOIN servers s ON s.id = sm.server_id WHERE sm.model_name = ?",
             (model_name,),
@@ -149,7 +155,7 @@ async def admin_assign_model(
         else:
             try:
                 conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (server_id, model_name))
-            except Exception:
+            except sqlite3.IntegrityError:
                 raise HTTPException(status_code=409, detail="Model already assigned to this server")
     clear_route_cache()
     return {"ok": True}
@@ -180,7 +186,7 @@ async def admin_create_alias(request: Request, authorization: str | None = Heade
             conn.execute(
                 "INSERT INTO model_aliases (alias_name, real_model_name) VALUES (?, ?)", (alias_name, real_model_name)
             )
-    except Exception:
+    except sqlite3.IntegrityError:
         raise HTTPException(status_code=409, detail="Alias already exists")
     clear_route_cache()
     return {"ok": True}

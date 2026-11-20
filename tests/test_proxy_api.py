@@ -221,6 +221,69 @@ class TestModelsEndpoint:
         assert data["object"] == "list"
         assert isinstance(data["data"], list)
 
+    def test_models_with_api_key(self, client, admin_key):
+        """When server has api_key, /v1/models forwards authorization header."""
+        from smol_llm_proxy.database import get_db
+
+        uid = f"apikey-srv-{id(client)}"
+        with get_db() as conn:
+            cursor = conn.execute(
+                "INSERT INTO servers (name, url, api_key) VALUES (?, ?, ?)",
+                (uid, "http://127.0.0.1:9999", "secret123"),
+            )
+            srv_id = cursor.lastrowid
+            conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (srv_id, "test-model"))
+
+        mock_data = {"object": "list", "data": [{"id": "test-model", "object": "model"}]}
+        captured = {}
+
+        async def _capture(target_url, headers, body, method):
+            captured[target_url] = dict(headers)
+            return (200, json.dumps(mock_data).encode())
+
+        try:
+            with patch("smol_llm_proxy.proxy._forward_request", new=AsyncMock(side_effect=_capture)):
+                resp = client.get("/v1/models", headers={"Authorization": f"Bearer {admin_key}"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["object"] == "list"
+            assert "authorization" in captured["http://127.0.0.1:9999/v1/models"]
+            assert captured["http://127.0.0.1:9999/v1/models"]["authorization"] == "Bearer secret123"
+        finally:
+            with get_db() as conn:
+                conn.execute("DELETE FROM servers WHERE id = ?", (srv_id,))
+
+    def test_models_without_api_key(self, client, admin_key):
+        """When server has no api_key, /v1/models does not send authorization header."""
+        from smol_llm_proxy.database import get_db
+
+        uid = f"nokey-srv-{id(client)}"
+        with get_db() as conn:
+            cursor = conn.execute(
+                "INSERT INTO servers (name, url, api_key) VALUES (?, ?, ?)",
+                (uid, "http://127.0.0.1:8888", ""),
+            )
+            srv_id = cursor.lastrowid
+            conn.execute("INSERT INTO server_models (server_id, model_name) VALUES (?, ?)", (srv_id, "test-model2"))
+
+        mock_data = {"object": "list", "data": [{"id": "test-model2", "object": "model"}]}
+        captured = {}
+
+        async def _capture(target_url, headers, body, method):
+            captured[target_url] = dict(headers)
+            return (200, json.dumps(mock_data).encode())
+
+        try:
+            with patch("smol_llm_proxy.proxy._forward_request", new=AsyncMock(side_effect=_capture)):
+                resp = client.get("/v1/models", headers={"Authorization": f"Bearer {admin_key}"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert data["object"] == "list"
+            assert "authorization" not in captured.get("http://127.0.0.1:8888/v1/models", {})
+        finally:
+            with get_db() as conn:
+                conn.execute("DELETE FROM servers WHERE id = ?", (srv_id,))
+
 
 class TestProxyHelpers:
     def test_extract_key(self):

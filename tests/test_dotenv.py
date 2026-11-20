@@ -16,6 +16,8 @@ class TestDotenvLoading:
             "DB_PATH",
             "CONFIG_PATH",
             "HTTPX_TIMEOUT",
+            "HTTPX_CONNECT_TIMEOUT",
+            "MODELS_TIMEOUT",
             "PROXY_MAX_CONNECTIONS",
             "PROXY_MAX_KEEPALIVE",
             "PROXY_KEEPALIVE_EXPIRY",

@@ -285,6 +285,8 @@ Each request logs: user, server, model name, prompt/completion tokens, timings (
 | `DB_PATH` | `data/proxy.db` | SQLite database location |
 | `CONFIG_PATH` | `config.yaml` | Path to YAML config file |
 | `HTTPX_TIMEOUT` | `120` | Upstream HTTP client timeout (seconds) |
+| `HTTPX_CONNECT_TIMEOUT` | `5` | TCP connect timeout for the shared upstream client (seconds); applies to all proxied requests |
+| `MODELS_TIMEOUT` | `5` | Total per-server budget for `/v1/models` fan-out (seconds); slow or unreachable servers are skipped |
 | `PROXY_MAX_CONNECTIONS` | `50` | httpx connection pool max size |
 | `PROXY_MAX_KEEPALIVE` | `20` | httpx keepalive pool max size |
 | `PROXY_KEEPALIVE_EXPIRY` | `30.0` | httpx keepalive expiry (seconds) |

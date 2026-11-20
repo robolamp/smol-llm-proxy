@@ -4,6 +4,42 @@ import time
 
 
 class TestAdminServers:
+    def test_missing_name_returns_400(self, client):
+        """POST /admin/servers with only url → 400."""
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 400
+
+    def test_missing_url_returns_400(self, client):
+        """POST /admin/servers with only name → 400."""
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": "test-srv"},
+        )
+        assert resp.status_code == 400
+
+    def test_empty_name_returns_400(self, client):
+        """POST /admin/servers with empty name → 400."""
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": "", "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 400
+
+    def test_empty_url_returns_400(self, client):
+        """POST /admin/servers with empty url → 400."""
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": "test-srv", "url": ""},
+        )
+        assert resp.status_code == 400
+
     def test_crud_and_duplicate(self, client):
         # Create
         resp = client.post(
@@ -71,6 +107,42 @@ class TestAdminModels:
         resp = client.delete(
             f"/admin/servers/{sid}/models/{model}",
             headers={"Authorization": "Bearer test-admin-key"},
+        )
+        assert resp.status_code == 200
+
+    def test_assign_model_nonexistent_server(self, client):
+        """POST /admin/servers/999/models → 404."""
+        resp = client.post(
+            "/admin/servers/999/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": "some-model.gguf"},
+        )
+        assert resp.status_code == 404
+        assert resp.json()["detail"] == "Server not found"
+
+    def test_assign_model_same_server_twice_is_idempotent(self, client):
+        """Assigning to same server twice → 200 (idempotent; 409 only for a DIFFERENT server without ?reassign)."""
+        uid = f"dup-model-{id(client)}"
+        resp = client.post(
+            "/admin/servers",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"name": uid, "url": "http://127.0.0.1:8080"},
+        )
+        assert resp.status_code == 200
+        sid = resp.json()["id"]
+        model = f"dup-model-{uid}.gguf"
+
+        resp = client.post(
+            f"/admin/servers/{sid}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
+        )
+        assert resp.status_code == 200
+
+        resp = client.post(
+            f"/admin/servers/{sid}/models",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"model_name": model},
         )
         assert resp.status_code == 200
 
@@ -153,6 +225,41 @@ class TestAdminAliases:
         # Delete
         resp = client.delete(f"/admin/aliases/{alias}", headers={"Authorization": "Bearer test-admin-key"})
         assert resp.status_code == 200
+
+    def test_missing_real_model_name_returns_400(self, client):
+        """POST /admin/aliases without real_model_name → 400."""
+        resp = client.post(
+            "/admin/aliases",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"alias_name": "standalone-alias"},
+        )
+        assert resp.status_code == 400
+
+    def test_empty_real_model_name_returns_400(self, client):
+        """POST /admin/aliases with empty real_model_name → 400."""
+        resp = client.post(
+            "/admin/aliases",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"alias_name": "standalone-alias", "real_model_name": ""},
+        )
+        assert resp.status_code == 400
+
+    def test_duplicate_alias_still_409(self, client):
+        """Creating a duplicate alias → still 409."""
+        alias = f"dup-alias-{id(client)}"
+        resp = client.post(
+            "/admin/aliases",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"alias_name": alias, "real_model_name": "some-model.gguf"},
+        )
+        assert resp.status_code == 200
+
+        resp = client.post(
+            "/admin/aliases",
+            headers={"Authorization": "Bearer test-admin-key"},
+            json={"alias_name": alias, "real_model_name": "other-model.gguf"},
+        )
+        assert resp.status_code == 409
 
 
 class TestAdminUsageSummary:
